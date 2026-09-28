@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MS-PL
+// SPDX-License-Identifier: MIT
 #pragma once
 #include "CnaService/Store.hpp"
 #include <mutex>

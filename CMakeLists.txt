@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MS-PL
+# SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.25)
 project(cna_gamer_services_server VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)

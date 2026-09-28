@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MS-PL
+// SPDX-License-Identifier: MIT
 #pragma once
 #include "CnaService/Protocol.hpp"
 #include <sqlite3.h>

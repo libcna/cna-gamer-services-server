@@ -1,4 +1,4 @@
--- SPDX-License-Identifier: MS-PL
+-- SPDX-License-Identifier: MIT
 CREATE TABLE assets(hash TEXT PRIMARY KEY CHECK(length(hash)=64), mime TEXT NOT NULL,
  size INTEGER NOT NULL CHECK(size BETWEEN 1 AND 16777216), bytes BLOB NOT NULL);
 CREATE TABLE title_assets(game_id TEXT NOT NULL REFERENCES titles(id), hash TEXT NOT NULL REFERENCES assets(hash),

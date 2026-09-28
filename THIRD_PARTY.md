@@ -14,6 +14,5 @@ Dependencies are found through CMake/system packages; their licenses are indepen
 | SQLite library >=3.38 | Public domain | [SQLite notice](https://www.sqlite.org/copyright.html) |
 
 Preserve dependency notices when packaging their sources or libraries. This MIT grant applies
-to original server files; it does not replace the licenses of linked dependencies. Existing SPDX
-labels will be synchronized with MIT at the next completed source checkpoint; the license text
-establishes the original server's license now.
+to original server files; it does not replace the licenses of linked dependencies. Source SPDX
+labels consistently identify MIT.

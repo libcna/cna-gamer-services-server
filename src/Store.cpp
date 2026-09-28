@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MS-PL
+// SPDX-License-Identifier: MIT
 #include "CnaService/Store.hpp"
 #include "InitialMigration.hpp"
 #include "AssetMigration.hpp"

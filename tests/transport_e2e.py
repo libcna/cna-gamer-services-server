@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MS-PL
+# SPDX-License-Identifier: MIT
 """Real TLS listener, independent client processes and restart persistence."""
 import json, os, pathlib, ssl, subprocess, sys, tempfile, urllib.request, struct, zlib, hashlib, selectors
 

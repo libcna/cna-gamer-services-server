@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MS-PL
+// SPDX-License-Identifier: MIT
 #include "CnaService/Listener.hpp"
 #include "CnaService/Service.hpp"
 #include <boost/asio.hpp>

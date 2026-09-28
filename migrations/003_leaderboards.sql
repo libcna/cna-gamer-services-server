@@ -1,4 +1,4 @@
--- SPDX-License-Identifier: MS-PL
+-- SPDX-License-Identifier: MIT
 CREATE TABLE leaderboards(game_id TEXT NOT NULL REFERENCES titles(id), key TEXT NOT NULL,
  mode INTEGER NOT NULL, ascending INTEGER NOT NULL, aggregation TEXT NOT NULL,
  arbitrated INTEGER NOT NULL, columns TEXT NOT NULL, PRIMARY KEY(game_id,key,mode));

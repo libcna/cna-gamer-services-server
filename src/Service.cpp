@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MS-PL
+// SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
 #include <openssl/crypto.h>
 #include <set>
