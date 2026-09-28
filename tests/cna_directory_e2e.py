@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Two genuine CNA processes: TLS directory/invites/restart and expired multi-local credentials.
-Control-only evidence; no public online NetworkSession or Internet realtime assertion.
+Public XNA BeginFind/EndFind plus private create/join control evidence; no public online
+create/join or Internet realtime assertion.
 """
 import os, pathlib, selectors, subprocess, sys, tempfile, urllib.parse
 
@@ -53,6 +54,11 @@ def main():
                 _,session,invite=read(host,"directory-host ").split()
                 # Same endpoint, new real server process, persisted invitation/membership.
                 port=urllib.parse.urlsplit(url).port;stop(server);server=None;server,url=start(port)
+                other_title="two" if game=="one" else "one"
+                foreign=spawn("search-empty",kind,other_title,url,("bob","dana"))
+                foreign.stdin.write("continue\n");foreign.stdin.flush()
+                foreign_output,_=foreign.communicate(timeout=30)
+                assert foreign.returncode==0 and "directory-done" in foreign_output,"public cross-title Find isolation"
                 join=spawn("join",kind,game,url,("bob","dana"))
                 expire("dana") # Owner stays valid: exercise stale secondary credential repair.
                 join.stdin.write("continue\n"+session+"\n"+invite+"\n");join.stdin.flush()
@@ -67,7 +73,7 @@ def main():
                 output,_=host.communicate(timeout=45);assert host.returncode==0 and "directory-done" in output,"CNA host/leaderboard probe"
                 print(kind,output.strip())
                 stop(server);server=None
-            print("Two CNA processes/four accounts passed: both directory kinds, two title IDs, verified TLS, server restart, filtering, ordinary/private invited join/leave/replay, expired owner+secondary credentials and leaderboard multi-local refresh. Control only; no relay/public online NetworkSession claim.")
+            print("Two primary CNA processes/four accounts plus an isolated-title search peer passed: standard BeginFind/EndFind, update-thread callback/metadata/End-once, both directory kinds, two title IDs, verified TLS, server restart, filtering, ordinary/private invited control join/leave/replay, expired owner+secondary credentials and leaderboard multi-local refresh. Public online create/join/lifecycle and realtime relay integration remain unfinished.")
         finally:
             for process in children:
                 if process.poll() is None:process.kill();process.wait()

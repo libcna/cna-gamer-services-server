@@ -4,7 +4,9 @@ Independent C++23 CNA service inspired by historical XNA functionality. **Not Xb
 mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
 reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
 The control-only PlayerMatch/Ranked session directory now supports authenticated multi-local
-membership, sparse property filtering, host revisions/leases and restart. CNA public online sessions,
+membership, sparse property filtering, host revisions/leases and restart. Standard CNA online
+BeginFind/EndFind now has real-server coverage for both categories, title isolation and restart;
+public online create/join sessions,
 public online lifecycle integration, platform keychains, push events and
 avatar distribution remain unfinished. Private CNA ENet relay transport is now tested with real
 separate processes and independently NATed rootless namespaces; public online lifecycle and
@@ -235,3 +237,12 @@ Tested external helper: Debian slirp4netns 1.2.1-1.1 with libslirp 4.8.0-1+deb13
 `/tmp` without installation. Original test orchestration remains MIT; external dependency notices
 are in THIRD_PARTY.md. Public NetworkSession/invites, reconnect and roster/async integration remain
 unfinished; NAT isolation does not complete those parent tasks.
+
+
+GS-007e2b public Find acceptance extends `service_cna_directory`: two primary CNA processes/four
+accounts plus another title's search process use standard BeginFind/EndFind, Update-thread callback,
+caller-owned metadata and End-once. Both PlayerMatch/Ranked filters survive service restart and
+expired secondary credentials; other titles see no advertisement. The same test's create/join,
+invites and heartbeat still use private control operations. This does not claim completed public
+NetworkSession lifecycle or avatar acceptance. Run with `CNA_SERVICE_DIRECTORY_CLIENT_HARNESS`
+pointing to the matching CNA `cna_service_directory_client_harness` executable.
