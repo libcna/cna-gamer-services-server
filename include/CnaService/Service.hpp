@@ -23,6 +23,10 @@ private:
     Json issueCredentials(const std::string& user,const std::string& game,const std::string& family={});
     Json refreshCredentials(const std::string& game,const Json& args);
     void revokeFamily(const std::string& family);
+    Json directory(const std::string& user,const std::string& game,const std::string& op,const Json& args);
+    Json directorySnapshot(const std::string& id,bool includeMembers);
+    std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args);
+    void pruneDirectory();
     Store store_;
     std::mutex mutex_;
     struct Rate { long long start=0; int count=0; };

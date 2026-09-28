@@ -29,6 +29,32 @@ def worker():
     os.chmod(state, 0o600)
 
 
+def directory_worker():
+    url, ca, state, action, kind = sys.argv[2:]
+    def login(name):
+        result=request(url,ca,"one","auth.login",{"username":name,"password":sys.stdin.readline().strip()})
+        assert result["error"]=="OK","directory worker authentication"
+        return result["result"]["token"]
+    properties=[17,None,None,None,None,None,None,42]
+    if action=="host":
+        token,local=login("alice"),login("charlie")
+        result=request(url,ca,"one","sessions.create",{"kind":kind,"maxGamers":8,"privateSlots":1,"properties":properties,"allowJoinInProgress":False,"participants":[token,local]},token)
+        assert result["error"]=="OK" and result["result"]["currentGamers"]==2
+        pathlib.Path(state).write_text(json.dumps({"token":token,"session":result["result"]["session"]}))
+        os.chmod(state,0o600)
+    else:
+        token,local=login("bob"),login("dana")
+        find={"kind":kind,"localCount":2,"start":0,"limit":8,"properties":[17,None,None,None,None,None,None,None]}
+        listed=request(url,ca,"one","sessions.find",find,token)["result"]["sessions"]
+        assert len(listed)==1 and listed[0]["kind"]==kind,"process discovery"
+        find["properties"][7]=41
+        assert request(url,ca,"one","sessions.find",find,token)["result"]["sessions"]==[],"property mismatch"
+        joined=request(url,ca,"one","sessions.join",{"session":listed[0]["session"],"participants":[token,local]},token)
+        assert joined["error"]=="OK" and joined["result"]["currentGamers"]==4
+        assert len({member["machine"] for member in joined["result"]["members"]})==2
+        assert request(url,ca,"one","sessions.leave",{"session":listed[0]["session"]},token)["result"]["ended"]==False
+
+
 def line_with_timeout(stream):
     with selectors.DefaultSelector() as selector:
         selector.register(stream, selectors.EVENT_READ)
@@ -200,6 +226,16 @@ def main():
                 token = request(url, str(ca), "one", "auth.refresh", {"refreshToken":main_refresh})["result"]["token"]
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
+            for kind in ("player","ranked"):
+                stop(server);server,url=start()
+                state=root/("directory-"+kind+".json")
+                subprocess.run([sys.executable,__file__,"--directory-worker",url,str(ca),str(state),"host",kind],input="alice-password\ncharlie-password\n",text=True,check=True)
+                stop(server);server,url=start()
+                subprocess.run([sys.executable,__file__,"--directory-worker",url,str(ca),str(state),"join",kind],input="bob-password\ndana-password\n",text=True,check=True)
+                host=json.loads(state.read_text())
+                snapshot=request(url,str(ca),"one","sessions.get",{"session":host["session"]},host["token"])
+                assert snapshot["result"]["currentGamers"]==2,"remote multi-local leave"
+                assert request(url,str(ca),"one","sessions.leave",{"session":host["session"]},host["token"])["result"]["ended"]==True
             credentials=request(url,str(ca),"one","auth.login",{"username":"alice","password":"alice-password"})["result"]
             stop(server);server,url=start()
             rotated=request(url,str(ca),"one","auth.refresh",{"refreshToken":credentials["refreshToken"]})["result"]
@@ -216,9 +252,10 @@ def main():
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
         if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, four local accounts and private refresh persistence/resume, expiry renewal, Update heartbeat, outage/reconnect without identity duplication, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns, LocalWithLeaderboards/EndGame final writes and restart persistence")
-        print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, rotating refresh/replay/title isolation/heartbeat, revocation, insecure public bind refusal")
+        print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, rotating refresh/replay/title isolation/heartbeat, revocation, two-process/four-user PlayerMatch and Ranked directory filtering/join/leave/restart (control only), insecure public bind refusal")
 
 
 if __name__ == "__main__":
     if len(sys.argv)>1 and sys.argv[1]=="--worker": worker()
+    elif len(sys.argv)>1 and sys.argv[1]=="--directory-worker": directory_worker()
     else: main()

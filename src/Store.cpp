@@ -5,6 +5,7 @@
 #include "LeaderboardMigration.hpp"
 #include "LeaderboardGameMigration.hpp"
 #include "RefreshMigration.hpp"
+#include "SessionDirectoryMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -84,7 +85,7 @@ Store::Store(const std::string& path) {
         Statement version(db_,"PRAGMA user_version");
         (void)version.row();
         const auto current=version.number(0);
-        if (current>5) throw Error("UNSUPPORTED_DATABASE_VERSION");
+        if (current>6) throw Error("UNSUPPORTED_DATABASE_VERSION");
         if (current==0) {
             exec("BEGIN IMMEDIATE");
             exec(InitialMigration);
@@ -94,6 +95,7 @@ Store::Store(const std::string& path) {
         if(current<3){exec("BEGIN IMMEDIATE");exec(LeaderboardMigration);exec("COMMIT");}
         if(current<4){exec("BEGIN IMMEDIATE");exec(LeaderboardGameMigration);exec("COMMIT");}
         if(current<5){exec("BEGIN IMMEDIATE");exec(RefreshMigration);exec("COMMIT");}
+        if(current<6){exec("BEGIN IMMEDIATE");exec(SessionDirectoryMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

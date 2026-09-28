@@ -3,7 +3,9 @@
 Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Partial implementation: persistent accounts/title-scoped revocable authentication, profiles,
 mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
 reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
-Matchmaking/relay, platform keychains, push events and
+The control-only PlayerMatch/Ranked session directory now supports authenticated multi-local
+membership, sparse property filtering, host revisions/leases and restart. CNA public online sessions,
+relay, platform keychains, push events and
 avatar distribution remain unfinished. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Original service code is MIT. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
@@ -69,3 +71,12 @@ user storage. Other client platforms retain ephemeral credentials pending a secu
 server does not supply the endpoint before clients connect. Lost
 rotation responses can require fresh Guide sign-in. No credential logging or plaintext bearer
 persistence on the server. See the canonical protocol for caps, migration and security semantics.
+
+
+Schema 6 adds a persistent bounded session directory. Directory membership is control state;
+it grants neither ENet connectivity nor Ranked arbitration. Host/member leases are 90 seconds,
+renewed separately from account heartbeat. Expired host closes its directory; migration is pending.
+See the session-directory protocol section for exact request fields, limits and failures. CTest
+includes 99 dedicated assertions and two independent TLS directory clients with four user accounts
+for PlayerMatch and Ranked, including server restart/property filtering/leave. This is not proof of
+Internet multiplayer; CNA XNA frontend and relay remain active implementation tasks.
