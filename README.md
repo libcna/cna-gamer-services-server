@@ -5,8 +5,9 @@ mutual friend requests and presence, achievements, immutable pictures/assets and
 reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
 The control-only PlayerMatch/Ranked session directory now supports authenticated multi-local
 membership, sparse property filtering, host revisions/leases and restart. CNA public online sessions,
-relay, platform keychains, push events and
-avatar distribution remain unfinished. Do not call this complete or production-hardened.
+CNA ENet relay integration, platform keychains, push events and
+avatar distribution remain unfinished. The separate server WSS endpoint now forwards authenticated
+bounded datagrams; that alone does not prove Internet multiplayer. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Original service code is MIT. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
 
@@ -98,7 +99,7 @@ build/cna-gamer-services-admin service.sqlite3 reset-online your-title
 ```
 
 `inspect-online` reports JSON counts for directory sessions, members, retained invitations and
-sender counters. `reset-online` removes that title's sessions/membership/invitations through FK
+sender counters and relay ticket/grant records. `reset-online` removes that title's sessions/membership/invitations through FK
 cascade; accounts, achievements, leaderboard data and independent invite abuse counters remain.
 Neither operation is remotely exposed by the control service.
 
@@ -146,3 +147,34 @@ general TLS 57.18s; two-CNA control/ticket issuance 6.53s (32 join/17 host check
 Clean `-Werror` build, no skipped test. Capability `relay-tickets` means issuance only; WSS forwarding
 and Internet realtime connectivity are still pending and `relay` is not advertised. See
 [relay authority contract](protocol/relay-v1.md).
+
+GS-008b server relay uses a separate verified-WSS `/cna/relay/v1` endpoint, encrypted one-use
+credential hello, exact local-group authority, server-injected source IDs and title/session-only
+routing. Per-socket strands serialize reads/writes; queue reservations precede executor posting,
+including in-flight writes. Authentication/idle/grant/rate/resource limits and safe close semantics
+are in [the canonical relay specification](protocol/relay-v1.md). Only explicit numeric-loopback
+development may use plain WS. Capability `relay` identifies this server endpoint; CNA's private
+WSS/ENet bridge and public online NetworkSession integration remain unfinished.
+
+Independent WSS test client requires Python `websockets==15.0.1` (BSD-3-Clause, tests only);
+`tests/requirements.txt` pins it. The runtime server does not use Python. Test configuration:
+
+```sh
+ctest --test-dir build -R '^service_relay_(protocol|authorization|flow|wss)$' --output-on-failure
+```
+
+Tests include bounded/concurrent queue producers, rate windows, exact hello/golden validation,
+verified CA/hostname refusal, UTF-8/version/type/size errors, two multi-local machine groups in both
+session categories/titles, bidirectional binary forwarding, maximum fragmented datagrams, foreign
+session/title isolation, one-use/duplicate registration, repeated reconnect, slow-recipient queue
+overflow, directory lease loss and secondary-account revocation. They do not yet run CNA ENet
+under isolated routing/NAT or unblock a standard-API online XNA sample. The matching-build validation checkpoint below records results; prior GS-008a counts are history.
+
+GS-008b matching-build checkpoint (2026-09-28): clean GCC14 `-Werror` incremental build;
+configured native C++/C/directory CNA probes and CTest **9/9 passed in 120.48s**, no skipped tests.
+Service 5,217 assertions; directory 99; invitation 153; relay framing 10,027; authority 60;
+flow/queue/rate/hello/routing 725. General TLS/restart/CNA probe suite 56.96s; two-CNA control
+probe 6.47s (32 join/17 host checks per category); WSS 259 checks/47.36s. No CNA ENet or
+Internet multiplayer proof in this checkpoint. Logs: `build/relay-wss-build.log` and
+`build/relay-wss-final-matching.log`. The exact-limit empty continuation buffer fix and the
+slow-consumer fixture deadline correction are retained by meaningful wire tests.

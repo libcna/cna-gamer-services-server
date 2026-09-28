@@ -11,6 +11,7 @@ Dependencies are found through CMake/system packages; their licenses are indepen
 | OpenSSL >=3.0 | Apache-2.0 | [OpenSSL licensing](https://openssl-library.org/source/license/index.html) |
 | Boost headers/Beast | BSL-1.0 | [Boost license](https://www.boost.org/LICENSE_1_0.txt) |
 | nlohmann/json | MIT | [JSON license](https://json.nlohmann.me/home/license/) |
+| Python websockets 15.0.1 (integration tests only) | BSD-3-Clause | [websockets license](https://github.com/python-websockets/websockets/blob/15.0.1/LICENSE) |
 | SQLite library >=3.38 | Public domain | [SQLite notice](https://www.sqlite.org/copyright.html) |
 
 Preserve dependency notices when packaging their sources or libraries. This MIT grant applies

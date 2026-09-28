@@ -38,7 +38,8 @@ int main(int argc,char** argv) {
                     {"sessions","SELECT COUNT(*) FROM directory_sessions WHERE game_id=?"},
                     {"members","SELECT COUNT(*) FROM directory_members WHERE game_id=?"},
                     {"invitations","SELECT COUNT(*) FROM session_invitations WHERE game_id=?"},
-                    {"senderLimits","SELECT COUNT(*) FROM invitation_send_limits WHERE game_id=?"}}) {
+                    {"senderLimits","SELECT COUNT(*) FROM invitation_send_limits WHERE game_id=?"},
+                    {"relayTickets","SELECT COUNT(*) FROM relay_tickets WHERE game_id=?"}}) {
                     CnaService::Statement count(store.db(),query);count.bind(1,argv[3]);(void)count.row();counts[name]=count.number(0);
                 }
                 std::cout<<counts.dump()<<'\n';

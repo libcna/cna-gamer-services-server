@@ -1,0 +1,2 @@
+# Independent verified WSS integration client; runtime server does not need Python.
+websockets==15.0.1

@@ -41,7 +41,7 @@ int main() {
         auto remoteTicket=[&]{return mint(1,session,Json::array({token(1),token(3)}));};
         const auto hello=call(*service,"hello",Json::object())["result"]["capabilities"];
         check(std::find(hello.begin(),hello.end(),Json("relay-tickets"))!=hello.end(),"ticket capability advertised");
-        check(std::find(hello.begin(),hello.end(),Json("relay"))==hello.end(),"unfinished forwarding not advertised");
+        check(std::find(hello.begin(),hello.end(),Json("relay"))!=hello.end(),"forwarding capability advertised");
         check(mint(0,session,Json::array({token(0)}))["error"]=="NOT_AUTHORIZED","partial local group refused");
         check(mint(2,session,Json::array({token(0),token(2)}))["error"]=="NOT_AUTHORIZED","secondary cannot impersonate machine owner");
         check(mint(0,session,Json::array({token(0),token(4)}))["error"]=="NOT_AUTHORIZED","foreign participant refused");

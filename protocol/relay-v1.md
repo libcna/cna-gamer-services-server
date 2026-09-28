@@ -1,13 +1,14 @@
 # CNA realtime relay protocol v1
 
 This CNA-owned protocol/accounts/assets are not Xbox LIVE compatible. This document defines
-bounded framing and relay ticket/grant authority through GS-008a2. The WSS endpoint and forwarding
-are the next slices; no relay data capability or Internet connectivity is currently implemented.
+bounded framing, ticket/grant authority and the GS-008b authenticated WSS endpoint. Verified-WSS
+forwarding/security tests pass for both directory categories and isolated titles/sessions. CNA ENet/public online-session integration and isolated
+Internet connectivity acceptance are subsequent work; this endpoint alone does not prove them.
 Canonical codec: `protocol/include/CnaService/RelayProtocol.hpp`, `src/RelayProtocol.cpp`;
 golden corpus `protocol/golden/relay-v1.json`. CNA copies these artifacts exactly and tests drift.
 
 Control remains verified HTTPS POST `/cna/v1`: accounts, directory membership, host revisions,
-invitations and upcoming tickets. Realtime relay uses a separate verified WSS upgrade endpoint
+invitations and ticket issuance. Realtime relay uses a separate verified WSS upgrade endpoint
 `/cna/relay/v1`. It forwards ENet UDP datagrams, never XNA objects or REST gameplay payloads.
 Tickets/credentials must remain inside TLS messages, never URLs/logs. The client uses a private
 loopback UDP bridge with a route for each service-authorized machine; relay is mandatory first,
@@ -44,20 +45,60 @@ in precedence order: `RELAY_TRUNCATED` (<24), `RELAY_TOO_LARGE` (>4120), `RELAY_
 Transport will close/refuse malformed messages without echoing bytes or credentials. Golden vectors
 exercise each code; boundary tests cover empty/maximum/oversize and deterministic 10,000 mutations.
 
-## Pending authenticated transport requirements
+## Authenticated WebSocket transport
 
-One-use hashed 60s tickets must bind title/session/machine and all local users' revocable authority.
-Normal access refresh must preserve an established machine grant; logout/revocation/leave/host
-expiry must invalidate it. Maintain one connection per machine, handshake deadlines, periodic grant
-checks, per-connection read/write serialization, bounded queues/backpressure and rate limits.
-Reconnect needs a fresh ticket. Advertise relay only after the endpoint actually forwards data.
-Test genuine multi-process ENet under relay-only isolation/firewall restrictions before any Internet
-multiplayer claim; localhost membership tests alone do not meet that criterion.
+Upgrade exactly `/cna/relay/v1`, without query parameters. Production uses verified WSS with TLS
+>=1.2. The existing explicit insecure development switch permits unencrypted WS only on a numeric
+loopback bind; it must never authenticate Internet clients. No compression is negotiated. Client
+certificate/hostname/CA verification is mandatory; credentials are never URL parameters or headers.
+First message is text UTF-8 JSON, <=1,024 bytes, within 5s of upgrade, exactly four fields:
+
+```json
+{"v":1,"id":"relay-request","game":"your-title","ticket":"<64 lowercase hex digits>"}
+```
+
+`id` and `game` obey control v1 identifiers (1..64 ASCII letters/digits/dash/underscore/dot).
+Duplicate/unknown fields, noninteger/unknown versions, invalid IDs/UTF-8 and malformed tickets are
+refused deterministically. Redeem the one-use ticket and register at most one connection for the
+exact authorized title/session/machine. Success is one text response, then only binary datagrams:
+
+```json
+{"v":1,"id":"relay-request","error":"OK","result":{"session":"<32 hex>","machine":"<32 hex>","capabilities":["enet-datagrams"],"maxDatagramBytes":4096,"maxQueuedFrames":64}}
+```
+
+The server substitutes its own authenticated source machine into each outgoing binary frame.
+Unknown, disconnected, same-machine and foreign title/session destinations drop without response;
+they never broadcast or reveal another session's membership. Reconnect requires a fresh HTTPS
+ticket. Closing releases only that connection's grant, not account or directory membership. A
+new ticket cannot replace an existing active channel; its consumed grant is released on refusal.
+
+Policy closes use WebSocket 1008 (bad credentials, duplicate/full registration, queue/rate/authority
+failure); malformed envelope/version/type/identifier uses 1002, invalid text UTF-8 uses 1007,
+oversize accumulated messages use 1009. Safe empty close reasons contain no input or credentials.
+Transport failure/authentication timeout may abort TCP without a close frame. Close handshakes have
+a 5s ceiling. Idle timeout is 30s with keepalive ping. Client ping/pong/close frames count toward
+ingress limits even before authentication. Grant checks run every 5s; family revocation, title/
+membership/host lease loss or grant expiry closes the channel within that interval. Relay does not
+renew the separate 90s directory lease. A continuously revoked grant may therefore remain routed
+until its next check, at most 5s; no claim of immediate per-datagram account revocation.
+
+Resource policy: 96 live relay channels (out of the listener's 128 total connections), 512 incoming
+datagram/control messages per fixed monotonic one-second window, 1 MiB binary bytes/window.
+Application write queues hold <=64 complete frames/263,680 bytes, including the active write.
+Capacity is reserved before posting across strands; at most one wake/overflow notification is
+pending. Overflow closes the slow recipient. Each accepted socket has its own Asio strand, one
+reader and one serialized writer. Pending writes own their buffers until completion/cancellation.
+These explicit prototype caps are not an unbounded production cluster/scaling claim.
+
+Canonical handshake examples accompany binary golden vectors. Queue/rate/session/title routing
+unit tests cover resource boundaries and concurrent producers. Verified-WSS independent-client tests
+cover secure forwarding and failure semantics. Genuine multi-process CNA ENet under relay-only
+isolation/firewall restrictions is still required before an Internet multiplayer claim.
 
 ## Ticket and connection authority (implemented GS-008a2)
 
 Capability `relay-tickets` covers HTTPS `sessions.relayTicket {session,participants}`. It is
-separate from a working `relay` capability (not yet advertised). `participants` contains 1..4
+separate from the `relay` capability for this WSS endpoint. `participants` contains 1..4
 current authenticated title-bound access credentials matching the machine's complete directory
 group; actor must own that machine. Secondary/nonmembers/partial/foreign/duplicate/revoked
 groups fail before issuance. Result exactly `{ticket,session,machine,expires,serverTime,relayVersion,
@@ -80,6 +121,6 @@ from accumulating grants; abandoned used records expire within an hour. Existing
 90s directory leases remain authoritative and a ticket does not extend them. Migrations are
 transactional; schema 7 and earlier preserve accounts/catalog/data, newer schema is refused.
 
-Transport still must implement TLS-only ticket messages, bounded handshake, one channel per
-machine, periodic revocation checks, queue/rate limits and source-authorized forwarding. Issuing
-a ticket alone is not a realtime connection or proof of Internet multiplayer.
+Transport implements TLS-only ticket messages, bounded handshake, one channel per machine,
+periodic revocation checks, queue/rate limits and source-authorized forwarding as specified above.
+Neither ticket issuance nor standalone WSS forwarding proves CNA ENet Internet multiplayer.
