@@ -71,7 +71,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
     static const std::map<std::string,std::set<std::string>> fields{
         {"sessions.create",{"kind","maxGamers","privateSlots","properties","allowJoinInProgress","participants"}},
         {"sessions.find",{"kind","localCount","properties","start","limit"}},
-        {"sessions.join",{"session","participants"}},
+        {"sessions.join",{"session","participants"}},{"sessions.joinInvited",{"session","invite","participants"}},
         {"sessions.get",{"session"}},{"sessions.touch",{"session"}},{"sessions.leave",{"session"}},
         {"sessions.update",{"session","revision","maxGamers","privateSlots","properties","state","allowJoinInProgress"}}};
     const auto definition=fields.find(op);if(definition==fields.end())throw Error("UNKNOWN_OPERATION");
@@ -116,17 +116,38 @@ Json Service::directory(const std::string& user,const std::string& game,const st
     const auto id=sessionId(args);Transaction transaction(store_);
     Statement session(store_.db(),"SELECT host_id,host_machine,state,allow_join,revision,max_gamers,private_slots FROM directory_sessions WHERE id=? AND game_id=?");session.bind(1,id);session.bind(2,game);
     if(!session.row())throw Error("NOT_FOUND");
-    if(op=="sessions.join") {
+    if(op=="sessions.join"||op=="sessions.joinInvited") {
+        const bool invited=op=="sessions.joinInvited";
         const auto members=directoryParticipants(user,game,args);
+        std::string inviteId,inviteStatus,usedMachine;
+        if(invited) {
+            inviteId=stringField(args,"invite",32);
+            if(inviteId.size()!=32||inviteId.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+            Statement invitation(store_.db(),"SELECT recipient_id,status,expires,used_machine FROM session_invitations WHERE id=? AND session_id=? AND game_id=?");
+            invitation.bind(1,inviteId);invitation.bind(2,id);invitation.bind(3,game);
+            if(!invitation.row())throw Error("NOT_FOUND");
+            if(invitation.text(0)!=user)throw Error("NOT_AUTHORIZED");
+            inviteStatus=invitation.text(1);usedMachine=invitation.text(3);
+            if(invitation.number(2)<=now()||(inviteStatus!="accepted"&&inviteStatus!="used"))throw Error("INVALID_STATE");
+        }
+        auto consume=[&](const std::string& machine) {
+            if(invited) {
+                if(inviteStatus=="used"&&usedMachine!=machine)throw Error("INVALID_STATE");
+                Statement update(store_.db(),"UPDATE session_invitations SET status='used',used_machine=? WHERE id=?");update.bind(1,machine);update.bind(2,inviteId);(void)update.row();
+            }
+        };
         Statement existing(store_.db(),"SELECT id FROM directory_machines WHERE session_id=? AND owner_id=?");existing.bind(1,id);existing.bind(2,user);
         if(existing.row()) {
             std::set<std::string> prior;Statement group(store_.db(),"SELECT user_id FROM directory_members WHERE machine_id=?");group.bind(1,existing.text(0));while(group.row())prior.insert(group.text(0));
             if(prior!=std::set<std::string>(members.begin(),members.end()))throw Error("INVALID_STATE");
+            consume(existing.text(0));
             auto result=directorySnapshot(id,true);result["machine"]=existing.text(0);transaction.commit();return result;
         }
+        if(invited&&inviteStatus=="used")throw Error("INVALID_STATE");
         if(session.text(2)=="playing"&&!session.number(3))throw Error("INVALID_STATE");
         const auto snapshot=directorySnapshot(id,true);
-        if(members.size()>snapshot["openPublicSlots"].get<std::size_t>())throw Error("SESSION_FULL");
+        auto privateAvailable=invited?snapshot["openPrivateSlots"].get<std::size_t>():0;
+        if(members.size()>snapshot["openPublicSlots"].get<std::size_t>()+privateAvailable)throw Error("SESSION_FULL");
         for(const auto& member:members) {
             Statement occupied(store_.db(),"SELECT 1 FROM directory_members WHERE game_id=? AND user_id=?");occupied.bind(1,game);occupied.bind(2,member);
             if(occupied.row())throw Error("INVALID_STATE");
@@ -135,10 +156,12 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         const auto machine=randomHex(16);Statement group(store_.db(),"INSERT INTO directory_machines(id,session_id,owner_id,expires) VALUES(?,?,?,?)");group.bind(1,machine);group.bind(2,id);group.bind(3,user);group.bind(4,now()+90);(void)group.row();
         for(const auto& member:members) {
             long long ordinal=0;while(ordinals.contains(ordinal))++ordinal;ordinals.insert(ordinal);
-            Statement join(store_.db(),"INSERT INTO directory_members(session_id,game_id,user_id,machine_id,private_slot,ordinal) VALUES(?,?,?,?,0,?)");
-            join.bind(1,id);join.bind(2,game);join.bind(3,member);join.bind(4,machine);join.bind(5,ordinal);(void)join.row();
+            Statement join(store_.db(),"INSERT INTO directory_members(session_id,game_id,user_id,machine_id,private_slot,ordinal) VALUES(?,?,?,?,?,?)");
+            join.bind(1,id);join.bind(2,game);join.bind(3,member);join.bind(4,machine);join.bind(5,privateAvailable?1LL:0LL);join.bind(6,ordinal);(void)join.row();
+            if(privateAvailable)--privateAvailable;
         }
         Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();
+        consume(machine);
         auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
     }
     Statement member(store_.db(),"SELECT m.machine_id FROM directory_members m WHERE m.session_id=? AND m.user_id=?");member.bind(1,id);member.bind(2,user);

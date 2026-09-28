@@ -80,3 +80,31 @@ See the session-directory protocol section for exact request fields, limits and 
 includes 99 dedicated assertions and two independent TLS directory clients with four user accounts
 for PlayerMatch and Ranked, including server restart/property filtering/leave. This is not proof of
 Internet multiplayer; CNA XNA frontend and relay remain active implementation tasks.
+
+
+Schema 7 adds authenticated persistent invitations, explicit accept/dismiss and invited multi-local
+private-slot joins. The capability is control-only, with recipient/title binding, strict limits and
+independent persistent abuse counters. CTest includes invitation authorization, atomicity, expiry,
+replay, restart and close/recreate quota checks; TLS workers exercise receipt across server restart
+and private/public allocation for both directory kinds. Public CNA Guide/InviteAccepted integration,
+relay and console Ranked behavioral verification remain unfinished. Migration runs transactionally
+on opening a schema-6-or-earlier database; back up the SQLite database before upgrading deployments.
+
+Administration for isolated development state (no credentials printed):
+
+```sh
+build/cna-gamer-services-admin service.sqlite3 inspect-online your-title
+build/cna-gamer-services-admin service.sqlite3 reset-online your-title
+```
+
+`inspect-online` reports JSON counts for directory sessions, members, retained invitations and
+sender counters. `reset-online` removes that title's sessions/membership/invitations through FK
+cascade; accounts, achievements, leaderboard data and independent invite abuse counters remain.
+Neither operation is remotely exposed by the control service.
+
+GS-007c validation checkpoint (2026-09-28): GCC14 clean build with `-Werror`, two compile jobs;
+CTest **4/4 passed in 65.71s**: service unit 5,216 assertions, directory 99 assertions, invitations
+153 assertions, verified-TLS multi-process/restart suite. The TLS suite runs separate service
+clients, both online directory types and recipient-confirmed private-slot joins, and administration
+reset checks. This proves service control/membership behavior, not public XNA online sessions
+or Internet realtime connectivity. The CNA protocol copy/drift gate is synchronized independently.

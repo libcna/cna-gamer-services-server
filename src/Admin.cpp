@@ -26,6 +26,23 @@ int main(int argc,char** argv) {
             for(const auto* sql:{"SELECT COUNT(*) FROM users","SELECT COUNT(*) FROM titles","SELECT COUNT(*) FROM sessions","SELECT COUNT(*) FROM earned"}) {
                 CnaService::Statement s(store.db(),sql);(void)s.row();std::cout<<s.number(0)<<'\n';
             }
+        } else if((command=="inspect-online"||command=="reset-online")&&argc==4) {
+            if(!CnaService::identifier(argv[3]))throw CnaService::Error("INVALID_ARGUMENT");
+            CnaService::Statement title(store.db(),"SELECT 1 FROM titles WHERE id=?");title.bind(1,argv[3]);
+            if(!title.row())throw CnaService::Error("UNKNOWN_TITLE");
+            if(command=="reset-online") {
+                CnaService::Statement remove(store.db(),"DELETE FROM directory_sessions WHERE game_id=?");remove.bind(1,argv[3]);(void)remove.row();
+            } else {
+                CnaService::Json counts=CnaService::Json::object();
+                for(const auto& [name,query]:std::initializer_list<std::pair<const char*,const char*>>{
+                    {"sessions","SELECT COUNT(*) FROM directory_sessions WHERE game_id=?"},
+                    {"members","SELECT COUNT(*) FROM directory_members WHERE game_id=?"},
+                    {"invitations","SELECT COUNT(*) FROM session_invitations WHERE game_id=?"},
+                    {"senderLimits","SELECT COUNT(*) FROM invitation_send_limits WHERE game_id=?"}}) {
+                    CnaService::Statement count(store.db(),query);count.bind(1,argv[3]);(void)count.row();counts[name]=count.number(0);
+                }
+                std::cout<<counts.dump()<<'\n';
+            }
         } else if(command=="revoke-user"&&argc==4) {
             store.exec("BEGIN IMMEDIATE");
             CnaService::Statement families(store.db(),"DELETE FROM refresh_families WHERE user_id=(SELECT id FROM users WHERE username=?)");families.bind(1,argv[3]);(void)families.row();

@@ -27,6 +27,9 @@ private:
     Json directorySnapshot(const std::string& id,bool includeMembers);
     std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args);
     void pruneDirectory();
+    Json invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args);
+    Json invitationSnapshot(const std::string& id);
+
     Store store_;
     std::mutex mutex_;
     struct Rate { long long start=0; int count=0; };
