@@ -104,6 +104,15 @@ Json Service::beginLeaderboardGame(const std::string& user,const std::string& ga
     }catch(...){store_.exec("ROLLBACK");throw;}
     return Json{{"gameplay",id}};
 }
+Json Service::abortLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
+    const auto gameplay=stringField(args,"gameplay",32);
+    if(gameplay.size()!=32||gameplay.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+    Statement scope(store_.db(),"SELECT owner_id,committed FROM leaderboard_games WHERE id=? AND game_id=?");scope.bind(1,gameplay);scope.bind(2,game);
+    if(!scope.row())return Json::object();
+    if(scope.text(0)!=user)throw Error("NOT_AUTHORIZED");
+    if(!scope.text(1).empty())throw Error("INVALID_STATE");
+    Statement remove(store_.db(),"DELETE FROM leaderboard_games WHERE id=?");remove.bind(1,gameplay);(void)remove.row();return Json::object();
+}
 Json Service::commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
     const auto gameplay=stringField(args,"gameplay",32);
     if(!args.contains("entries")||!args["entries"].is_array()||args["entries"].size()>128)throw Error("LIMIT_EXCEEDED");

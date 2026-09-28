@@ -19,6 +19,7 @@ private:
     Json readLeaderboard(const std::string& game,const Json& args);
     Json beginLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
     Json commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
+    Json abortLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
     Store store_;
     std::mutex mutex_;
     struct Rate { long long start=0; int count=0; };

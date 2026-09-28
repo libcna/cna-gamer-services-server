@@ -150,6 +150,21 @@ int main() {
             check(call(s,"one","leaderboards.game.begin",{{"kind","ranked"},{"participants",Json::array({alice})}},alice)["error"]=="NOT_SUPPORTED","unadvertised ranked scope");
             check(call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({other})}},alice)["error"]=="NOT_AUTHORIZED","cross title participants");
             check(call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({bob})}},alice)["error"]=="NOT_AUTHORIZED","owner missing membership");
+            check(call(s,"one","leaderboards.game.abort",{{"gameplay",scope}},alice)["error"]=="INVALID_STATE","cannot abort committed epoch");
+            check(call(s,"one","leaderboards.game.abort",{{"gameplay","../file"}},alice)["error"]=="INVALID_ARGUMENT","malformed abort id");
+            std::vector<Json> abandoned;
+            for(int attempt=0;attempt<17;++attempt) {
+                auto response=call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({alice})}},alice);
+                if(response["error"]=="LIMIT_EXCEEDED")break;
+                check(response["error"]=="OK","epoch quota setup");abandoned.push_back(response["result"]["gameplay"]);
+            }
+            check(!abandoned.empty()&&abandoned.size()<17,"active epoch quota enforced");
+            check(call(s,"one","leaderboards.game.abort",{{"gameplay",abandoned[0]}},bob)["error"]=="NOT_AUTHORIZED","abort host authority");
+            {Service restarted(path.string());check(call(restarted,"one","leaderboards.game.abort",{{"gameplay",abandoned[0]}},alice)["error"]=="OK","abort after restart");}
+            for(const auto& epoch:abandoned)check(call(s,"one","leaderboards.game.abort",{{"gameplay",epoch}},alice)["error"]=="OK","abort and repeated abort");
+            auto replacement=call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({alice})}},alice);
+            check(replacement["error"]=="OK","abort releases quota");
+            check(call(s,"one","leaderboards.game.abort",{{"gameplay",replacement["result"]["gameplay"]}},alice)["error"]=="OK","replacement cleanup");
             check(call(s,"one","auth.logout",Json::object(),alice)["error"]=="OK","logout");
             check(call(s,"one","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","revoked token");
             for(int i=0;i<10;++i)check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="AUTHENTICATION_FAILED","throttle threshold");

@@ -51,7 +51,8 @@ printf '%s' '{"key":"BestScoreLifeTime","mode":0,"gamertag":"Alice","rating":123
 These administration seeds are fixtures. Online clients read persisted paged, centered or restricted
 boards; gameplay setters are transient until session-authorized commits are implemented. No Ranked,
 TrueSkill or Ranked arbitration capability is claimed yet. Schema 4 adds authenticated local game
-epochs and atomic/idempotent EndGame commits; abort/leave submission remains pending.
+epochs and atomic/idempotent EndGame/early-leave commits; authenticated abort releases interrupted
+epochs. Offline crash cleanup is best effort and expires by the documented quota/lifetime.
 SQLite >=3.38 supplies JSON table filtering.
 
 Original server source, protocol and tests use the [MIT license](LICENCE). See
