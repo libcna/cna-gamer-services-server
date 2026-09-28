@@ -108,3 +108,18 @@ CTest **4/4 passed in 65.71s**: service unit 5,216 assertions, directory 99 asse
 clients, both online directory types and recipient-confirmed private-slot joins, and administration
 reset checks. This proves service control/membership behavior, not public XNA online sessions
 or Internet realtime connectivity. The CNA protocol copy/drift gate is synchronized independently.
+
+GS-007d real CNA control probe: set `CNA_SERVICE_DIRECTORY_CLIENT_HARNESS` to CNA's
+`cmake-build-debug/cna_service_directory_client_harness`; `service_cna_directory` explicitly skips
+with return 77 when absent. It runs two independent CNA processes with standard Guide sign-in and
+four separate accounts, both directory categories/two titles, real server restart and recipient
+confirmation, property filtering, ordinary/invited private membership, retries/departure, deliberately
+expired owner and secondary access credentials, secondary-only revocation at Dispatcher.Update,
+and the existing multi-local leaderboard scope refresh path. Directory operations use CNA's
+private typed backend; this is not a standard-API online NetworkSession acceptance game.
+
+Full measured integration gate (2026-09-28): `CNA_SERVICE_CLIENT_HARNESS=<CNA C++ probe>
+CNA_SERVICE_C_API_HARNESS=<pure C probe> CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=<directory probe>
+ctest --test-dir build --output-on-failure`: **5/5 passed in 75.37s**. Unit 5,216 assertions;
+directory 99; invitation 153; general TLS E2E 59.24s; two-CNA control E2E 6.85s
+(31 join/16 host checks per directory category). No server production code changed in this step.

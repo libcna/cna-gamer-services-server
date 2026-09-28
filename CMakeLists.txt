@@ -52,3 +52,6 @@ add_executable(invitation_tests tests/InvitationTests.cpp)
 target_link_libraries(invitation_tests PRIVATE cna_service)
 target_compile_options(invitation_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME service_invitations COMMAND invitation_tests)
+
+add_test(NAME service_cna_directory COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_directory_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(service_cna_directory PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
