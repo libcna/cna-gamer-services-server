@@ -348,3 +348,12 @@ handler, exactly as the original Invites sample does; the rest of the lifecycle 
 above for both categories/titles. Only keystrokes and message-box clicks are simulated. Full corpus
 with all probes and the NAT helper: **17/17 pass, zero skips, 217.97s** (invite 18.51s, invite NAT
 20.39s; the recipient's first 5 s inbox poll dominates). No server code or schema change.
+
+GS-008d2 recovery (2026-09-28): `service_cna_session_restart` (and `_nat`) stop the real service
+between the roster and data phases of a live public session and restart it on the same port and
+database. Both CNA processes keep their standard NetworkSession: the relay reconnects with fresh
+one-use tickets while the loopback routes (so ENet peers) stay, directory reads/lease renewals are
+retried, and the session continues through data exchange, StartGame/EndGame, leaderboard commits,
+Ranked arbitration and departure. A reliable round trip precedes the data phase; right after the
+restart the one unreliable packet may be dropped by ENet's throttle, all reliable ones must arrive.
+Full corpus with every probe and the NAT helper: **20/20, zero skips, 340.73s**.

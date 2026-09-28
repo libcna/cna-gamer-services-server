@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: MIT
 """Two CNA processes using only the public XNA NetworkSession API against this service."""
-import os, pathlib, selectors, shutil, subprocess, sys, tempfile, time
+import os, pathlib, selectors, shutil, socket, subprocess, sys, tempfile, time
 
 
 def main():
     flags=sys.argv[2:]
-    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite"},"test arguments"
+    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart"},"test arguments"
     isolated="--isolated" in flags
     invite="--invite" in flags
+    restart="--restart" in flags
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
@@ -41,9 +42,13 @@ def main():
         for user in ("alice","bob","charlie","dana"):
             subprocess.run([admin,str(db),"user",user,user.title()],input=user+"-password\n",text=True,check=True,stdout=subprocess.DEVNULL)
         children=[];buffers={};server=None;nat_helpers=[];namespace_ids=set()
+        fixed="0"
+        if restart:
+            # A restart must come back on the same authority the clients were configured with.
+            probe=socket.socket();probe.bind(("127.0.0.1",0));fixed=str(probe.getsockname()[1]);probe.close()
         def start():
             process=subprocess.Popen([str(build/"cna-gamer-services-server"),"--database",str(db),"--listen","127.0.0.1",
-                "--port","0","--cert",str(cert),"--key",str(key)],stdout=subprocess.PIPE,text=True)
+                "--port",fixed,"--cert",str(cert),"--key",str(key)],stdout=subprocess.PIPE,text=True)
             line=process.stdout.readline();assert "listening" in line,"service startup"
             return process,"https://localhost:"+line.strip().rsplit(":",1)[1]+"/cna/v1"
         def stop(process):
@@ -112,8 +117,17 @@ def main():
                 host=spawn("host",kind,game,url);send(host,"alice-password\ncharlie-password\n");read(host,"session-created")
                 if invite:read(host,"invite-sent")
                 join=spawn("join",kind,game,url);send(join,"bob-password\ndana-password\n");read(join,"session-joined")
-                both("session-roster");proceed(host,join)
-                exchanged=both("session-exchanged ");assert exchanged==("session-exchanged 6","session-exchanged 6"),"six verified deliveries each way"
+                both("session-roster")
+                if restart:
+                    # The live session must survive a service restart: relay and directory reads
+                    # recover with fresh authority while ENet peers keep their loopback routes.
+                    stop(server);time.sleep(1);server,again=start();assert again==url,"same service authority"
+                proceed(host,join)
+                exchanged=both("session-exchanged ")
+                # Without an outage all six arrive; right after a restart the unreliable packet may be
+                # throttled by ENet, but all five reliable packets must still arrive.
+                allowed={"session-exchanged 6"} if not restart else {"session-exchanged 6","session-exchanged 5"}
+                assert set(exchanged)<=allowed,"verified deliveries each way: "+str(exchanged)
                 proceed(host,join);both("session-playing");proceed(host,join);both("session-lobby")
                 if kind=="player":
                     proceed(join);print(done(join));proceed(host);print(done(host))
@@ -122,7 +136,9 @@ def main():
                 stop(server);server=None
                 print(kind,"public XNA NetworkSession: two CNA processes/four Guide-signed-in accounts, pending Begin/End with one owner-thread callback,",
                     "Guide.ShowGameInvite -> Guide acceptance -> InviteAccepted -> synchronous JoinInvited," if invite else "property-filtered Find,",
-                    "complete GamerJoined replay, shared machines, six verified packets each way incl. 32KiB and in-order,",
+                    "complete GamerJoined replay, shared machines,",
+                    "server restart survived mid-session," if restart else "",
+                    "reliable packets incl. 32KiB each way (in-order unreliable best-effort after the restart)," if restart else "six verified packets each way incl. 32KiB and in-order,",
                     "host properties/join-in-progress and StartGame/EndGame observed remotely, per-machine EndGame leaderboard commits read back by both,",
                     "Ranked arbitrated rows from both machines resolved by agreement," if kind=="ranked" else "",
                     "client leave -> GamerLeft" if kind=="player" else "host leave -> SessionEnded(HostEndedSession)")

@@ -110,3 +110,8 @@ add_test(NAME service_cna_invite COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_S
 set_tests_properties(service_cna_invite PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 add_test(NAME service_cna_invite_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --invite --isolated)
 set_tests_properties(service_cna_invite_nat PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+# GS-008d2: a live public session survives a service restart (relay/directory recovery).
+add_test(NAME service_cna_session_restart COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --restart)
+set_tests_properties(service_cna_session_restart PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+add_test(NAME service_cna_session_restart_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --restart --isolated)
+set_tests_properties(service_cna_session_restart_nat PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
