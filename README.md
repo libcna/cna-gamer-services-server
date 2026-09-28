@@ -306,3 +306,11 @@ Final matching GS-008c3c2 corpus: **13/13 CTest pass, zero skips, 206.58s**. Inc
 HTTPS persistence, directory/invites, raw WSS/native/NAT probes and the new owned engine cases
 (9.96s native / 11.59s NAT). Exact revisions are recorded in CNA's living plan. The server
 implementation and schema remain unchanged; this commit registers and documents acceptance.
+
+GS-007e2c3a advances the owned acceptance probe through CNA's dispatcher-driven online-operation
+coordinator. A launch barrier explicitly says pending, allowing both processes to pump during
+handshake. Completion runs once on the owner only after prepared host transport or exact client
+welcome, and End-style consumption transfers initial roster/data observations with the session.
+Raw probes are unchanged. Matching raw-native/raw-NAT/owned-native/owned-NAT cases **4/4 pass,
+41.94s** (9.82s, 10.58s, 10.43s, 11.09s), with no skip. Public XNA adapter remains unfinished;
+no server protocol, business logic or migration changed in this acceptance update.

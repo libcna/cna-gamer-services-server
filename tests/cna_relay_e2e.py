@@ -104,11 +104,11 @@ def main():
                 _,session,machine=read(host,"relay-host ").split()
                 join=spawn("join",kind,game,url);send(join,"bob-password\ndana-password\n"+session+"\n")
                 _,remote=read(join,"relay-join ").split();assert remote!=machine,"distinct authenticated machines"
-                send(host,remote+"\n");read(host,"relay-ready");read(join,"relay-ready")
+                send(host,remote+"\n");boundary="relay-pending" if owned else "relay-ready";read(host,boundary);read(join,boundary)
                 send(host,"continue\n");send(join,"continue\n")
                 read(host,"relay-exchanged");read(join,"relay-exchanged")
                 if owned:
-                    print(kind,"two owned CNA session engines/four local accounts: pending preparation, exact verified welcome before client readiness, complete remote group join, four source-checked ENet packets each way across both local slots, 32KiB fragmentation/unreliable delivery, forbidden local sends refused")
+                    print(kind,"two owned CNA session operations/four local accounts: owner-dispatcher pending progress/completion, exact verified welcome before client readiness, consumed initial full roster, complete remote group join, four source-checked ENet packets each way across both local slots, 32KiB fragmentation/unreliable delivery, forbidden local sends refused")
                 else:
                     print(kind,"two CNA processes/four local accounts exchanged four verified ENet application packets each way, including 32KiB fragmentation and unreliable channel; forged existing sender and unknown target refused before delivery")
                 if kind=="player":
@@ -119,7 +119,7 @@ def main():
                 else:
                     stop(server);server=None;send(host,"continue\n");send(join,"continue\n");done(host);done(join)
             if owned:
-                print("Verified private owned preparation/session engine: TLS/WSS authority, exact ENet establishment, both local account slots, group departure on secondary revocation, single safe failure, owner-bound observations and lease cleanup. Public NetworkSession adapter, reconnect and public Internet deployment remain unfinished.")
+                print("Verified private owned online-operation/session engine: TLS/WSS authority, exact ENet establishment, both local account slots, group departure on secondary revocation, single safe failure, owner-bound observations and lease cleanup. Public NetworkSession adapter, reconnect and public Internet deployment remain unfinished.")
             if isolated:
                 assert len(namespace_ids)==4,"two separate NAT clients per category"
                 print("Verified NAT-isolated CNA libcurl WSS/ENet relay: separate rootless namespaces/NAT helpers, identical private addresses, no inbound mappings, two categories/titles, four identities, fragmented/unreliable game data, revocation and server failure. Raw mode separately tests UDP/malformed-packet guards. Public online NetworkSession, reconnect and public Internet deployment remain unfinished.")
