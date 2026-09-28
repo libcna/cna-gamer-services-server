@@ -142,6 +142,12 @@ def main():
                     environment.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID="one",CNA_GAMER_SERVICES_CA_BUNDLE=str(ca),CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
                     environment.pop("DISPLAY",None);environment["WAYLAND_DISPLAY"]=""
                     subprocess.run([c_client,user,state],input=user+"-password\n",text=True,env=environment,check=True,timeout=30)
+            if client:
+                stop(server);server,url=start()
+                run_cna(url,"alice","earned","leaderboard-write")
+                stop(server);server,url=start()
+                run_cna(url,"alice","earned","leaderboard-after")
+                run_cna(url,"bob","none","leaderboard-after")
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
             assert request(url, str(ca), "one", "auth.logout", token=token)["error"] == "OK"
@@ -150,7 +156,7 @@ def main():
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
-        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns")
+        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns, LocalWithLeaderboards/EndGame final writes and restart persistence")
         print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, revocation, insecure public bind refusal")
 
 

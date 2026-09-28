@@ -81,4 +81,59 @@ Json Service::readLeaderboard(const std::string& game,const Json& args) {
     Json rows=Json::array();while(page.row())rows.push_back(Json{{"userId",page.text(0)},{"gamertag",page.text(1)},{"rating",page.number(2)},{"columns",parse(page.text(3))},{"rank",page.number(4)}});
     return Json{{"start",start},{"total",total},{"entries",rows}};
 }
+Json Service::beginLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
+    if(stringField(args,"kind",16)!="local")throw Error("NOT_SUPPORTED");
+    if(!args.contains("participants")||!args["participants"].is_array()||args["participants"].empty()||args["participants"].size()>4)throw Error("INVALID_ARGUMENT");
+    std::set<std::string> members;const auto timestamp=now();
+    for(const auto& credential:args["participants"]) {
+        if(!credential.is_string()||credential.get_ref<const std::string&>().size()!=64)throw Error("INVALID_ARGUMENT");
+        Statement identity(store_.db(),"SELECT s.user_id,u.online_allowed FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.hash=? AND s.game_id=? AND s.expires>?");
+        identity.bind(1,sha256(credential.get_ref<const std::string&>()));identity.bind(2,game);identity.bind(3,timestamp);
+        if(!identity.row()||!identity.number(1))throw Error("NOT_AUTHORIZED");
+        if(!members.insert(identity.text(0)).second)throw Error("INVALID_ARGUMENT");
+    }
+    if(!members.contains(user))throw Error("NOT_AUTHORIZED");
+    Statement prune(store_.db(),"DELETE FROM leaderboard_games WHERE expires<?");prune.bind(1,timestamp);(void)prune.row();
+    Statement cap(store_.db(),"SELECT COUNT(*) FROM leaderboard_games WHERE owner_id=? AND committed='' AND expires>?");cap.bind(1,user);cap.bind(2,timestamp);(void)cap.row();if(cap.number(0)>=16)throw Error("LIMIT_EXCEEDED");
+    const auto id=randomHex(16);store_.exec("BEGIN IMMEDIATE");
+    try {
+        Statement insert(store_.db(),"INSERT INTO leaderboard_games(id,game_id,owner_id,kind,created,expires) VALUES(?,?,?,'local',?,?)");
+        insert.bind(1,id);insert.bind(2,game);insert.bind(3,user);insert.bind(4,timestamp);insert.bind(5,timestamp+86400);(void)insert.row();
+        for(const auto& member:members){Statement join(store_.db(),"INSERT INTO leaderboard_game_members(gameplay_id,user_id) VALUES(?,?)");join.bind(1,id);join.bind(2,member);(void)join.row();}
+        store_.exec("COMMIT");
+    }catch(...){store_.exec("ROLLBACK");throw;}
+    return Json{{"gameplay",id}};
+}
+Json Service::commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
+    const auto gameplay=stringField(args,"gameplay",32);
+    if(!args.contains("entries")||!args["entries"].is_array()||args["entries"].size()>128)throw Error("LIMIT_EXCEEDED");
+    Statement scope(store_.db(),"SELECT owner_id,committed FROM leaderboard_games WHERE id=? AND game_id=? AND expires>?");scope.bind(1,gameplay);scope.bind(2,game);scope.bind(3,now());
+    if(!scope.row())throw Error("NOT_FOUND");
+    if(scope.text(0)!=user)throw Error("NOT_AUTHORIZED");
+    const auto digest=sha256(args["entries"].dump());
+    if(!scope.text(1).empty()){if(scope.text(1)!=digest)throw Error("INVALID_STATE");return Json::object();}
+    std::set<std::tuple<std::string,std::string,long long>> unique;
+    struct Pending {std::string user,key,columns;long long mode,rating;bool latest,ascending;};std::vector<Pending> rows;
+    for(const auto& entry:args["entries"]) {
+        const auto target=stringField(entry,"userId",64),key=stringField(entry,"key",64);
+        const auto mode=integerField(entry,"mode",-2147483648LL,2147483647LL),rating=integerField(entry,"rating",std::numeric_limits<long long>::min(),std::numeric_limits<long long>::max());
+        if(!unique.emplace(target,key,mode).second)throw Error("INVALID_ARGUMENT");
+        Statement member(store_.db(),"SELECT 1 FROM leaderboard_game_members WHERE gameplay_id=? AND user_id=?");member.bind(1,gameplay);member.bind(2,target);if(!member.row())throw Error("NOT_AUTHORIZED");
+        Statement definition(store_.db(),"SELECT ascending,aggregation,arbitrated,columns FROM leaderboards WHERE game_id=? AND key=? AND mode=?");definition.bind(1,game);definition.bind(2,key);definition.bind(3,mode);if(!definition.row())throw Error("NOT_FOUND");
+        if(definition.number(2))throw Error("NOT_AUTHORIZED");
+        if(!entry.contains("columns"))throw Error("INVALID_ARGUMENT");
+        validateColumns(entry["columns"],parse(definition.text(3)));
+        rows.push_back({target,key,entry["columns"].dump(),mode,rating,definition.text(1)=="latest",definition.number(0)!=0});
+    }
+    store_.exec("BEGIN IMMEDIATE");
+    try {
+        for(const auto& row:rows) {
+            Statement write(store_.db(),"INSERT INTO leaderboard_entries(game_id,key,mode,user_id,rating,columns,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(game_id,key,mode,user_id) DO UPDATE SET rating=excluded.rating,columns=excluded.columns,updated=excluded.updated WHERE ?=1 OR (?=1 AND excluded.rating<leaderboard_entries.rating) OR (?=0 AND excluded.rating>leaderboard_entries.rating)");
+            write.bind(1,game);write.bind(2,row.key);write.bind(3,row.mode);write.bind(4,row.user);write.bind(5,row.rating);write.bind(6,row.columns);write.bind(7,now());write.bind(8,row.latest?1LL:0LL);write.bind(9,row.ascending?1LL:0LL);write.bind(10,row.ascending?1LL:0LL);(void)write.row();
+        }
+        Statement close(store_.db(),"UPDATE leaderboard_games SET committed=? WHERE id=?");close.bind(1,digest);close.bind(2,gameplay);(void)close.row();store_.exec("COMMIT");
+    }catch(...){store_.exec("ROLLBACK");throw;}
+    return Json::object();
+}
+
 }

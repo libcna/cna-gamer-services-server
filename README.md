@@ -2,7 +2,7 @@
 
 Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Partial implementation: persistent accounts/title-scoped revocable authentication, profiles,
 mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
-reads. Matchmaking/relay, refresh credentials, push events, gameplay leaderboard submission and
+reads and authenticated local gameplay commits. Matchmaking/relay, refresh credentials, push events and
 avatar distribution remain unfinished. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Service code MS-PL as CNA. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
@@ -50,7 +50,9 @@ printf '%s' '{"key":"BestScoreLifeTime","mode":0,"gamertag":"Alice","rating":123
 
 These administration seeds are fixtures. Online clients read persisted paged, centered or restricted
 boards; gameplay setters are transient until session-authorized commits are implemented. No Ranked,
-TrueSkill or EndGame submission capability is claimed yet. SQLite >=3.38 supplies JSON table filtering.
+TrueSkill or Ranked arbitration capability is claimed yet. Schema 4 adds authenticated local game
+epochs and atomic/idempotent EndGame commits; abort/leave submission remains pending.
+SQLite >=3.38 supplies JSON table filtering.
 
 Original server source, protocol and tests use the [MIT license](LICENCE). See
 [dependency notices](THIRD_PARTY.md) for the independently licensed transport/database/JSON libraries.

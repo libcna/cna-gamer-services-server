@@ -47,7 +47,7 @@ int main() {
             Json achievement{{"key","first"},{"name","First"},{"description","An award"},{"howToEarn","Play"},{"score",10}};
             db.achievement("one",achievement);db.achievement("two",achievement);
             Json board{{"key","BestScoreLifeTime"},{"mode",0},{"ascending",false},{"aggregation","best"},{"arbitrated",false},{"columns",{{"Rounds","int32"},{"Label","string"}}}};
-            db.leaderboard("one",board);db.leaderboard("two",board);board["mode"]=1;board["ascending"]=true;db.leaderboard("one",board);
+            db.leaderboard("one",board);db.leaderboard("two",board);board["mode"]=1;board["ascending"]=true;db.leaderboard("one",board);board["mode"]=2;board["aggregation"]="latest";db.leaderboard("one",board);board["mode"]=3;board["arbitrated"]=true;db.leaderboard("one",board);
             for(const auto& tag:{"Alice","Bob"}) {
                 Json row{{"key","BestScoreLifeTime"},{"mode",0},{"gamertag",tag},{"rating",tag==std::string("Alice")?100LL:200LL},{"columns",{{"Rounds",{{"type","int32"},{"value",3}}},{"Label",{{"type","string"},{"value","Original"}}}}}};
                 db.seedLeaderboard("one",row);row["mode"]=1;db.seedLeaderboard("one",row);
@@ -81,7 +81,7 @@ int main() {
             read.erase("pivot");read["gamers"]=Json::array();check(call(s,"one","leaderboards.read",read,alice)["result"]["total"]==0,"empty gamer restriction");
             read.erase("gamers");read["mode"]=1;check(call(s,"one","leaderboards.read",read,alice)["result"]["entries"][0]["gamertag"]=="Alice","ascending mode isolation");
             read["mode"]=0;check(call(s,"two","leaderboards.read",read,other)["result"]["total"]==0,"title board isolation");
-            read["size"]=0;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board zero page");read["size"]=101;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board page cap");read["size"]=1;read["mode"]=2;check(call(s,"one","leaderboards.read",read,alice)["error"]=="NOT_FOUND","missing board");
+            read["size"]=0;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board zero page");read["size"]=101;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board page cap");read["size"]=1;read["mode"]=99;check(call(s,"one","leaderboards.read",read,alice)["error"]=="NOT_FOUND","missing board");
             check(call(s,"two","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","token isolation");
             check(call(s,"one","achievements.award",{{"key","absent"}},alice)["error"]=="NOT_FOUND","invalid award");
             check(call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate")["error"]=="OK","award");
@@ -121,14 +121,43 @@ int main() {
             Service s(path.string());
             check(call(s,"one","achievements.list",Json::object(),alice)["result"]["achievements"][0]["earnedTicks"]>0,"restart/auth persistence");
             check(call(s,"one","leaderboards.read",{{"key","BestScoreLifeTime"},{"mode",0},{"start",0},{"size",2}},alice)["result"]["total"]==2,"board restart persistence");
+            auto scope=call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({alice,bob})}},alice)["result"]["gameplay"];
+            check(scope.is_string(),"authenticated local game scope");
+            Json rows=Json::array({{{"userId",call(s,"one","profile.get",{{"gamertag","Alice"}},alice)["result"]["userId"]},{"key","BestScoreLifeTime"},{"mode",0},{"rating",350},{"columns",{{"Rounds",{{"type","int32"},{"value",5}}}}}}});
+            check(call(s,"one","leaderboards.game.commit",{{"gameplay",scope},{"entries",rows}},bob)["error"]=="NOT_AUTHORIZED","commit host authority");
+            auto bad=rows;bad.push_back(rows[0]);bad[1]["key"]="undefined";
+            check(call(s,"one","leaderboards.game.commit",{{"gameplay",scope},{"entries",bad}},alice)["error"]=="NOT_FOUND","invalid commit row");
+            auto unchanged=call(s,"one","leaderboards.read",{{"key","BestScoreLifeTime"},{"mode",0},{"start",0},{"size",1},{"gamers",Json::array({"Alice"})}},alice)["result"]["entries"][0]["rating"];
+            check(unchanged==100,"invalid commit atomicity");
+            check(call(s,"one","leaderboards.game.commit",{{"gameplay",scope},{"entries",rows}},alice)["error"]=="OK","local game commit");
+            check(call(s,"one","leaderboards.game.commit",{{"gameplay",scope},{"entries",rows}},alice)["error"]=="OK","idempotent commit retry");
+            {Service restarted(path.string());check(call(restarted,"one","leaderboards.game.commit",{{"gameplay",scope},{"entries",rows}},alice)["error"]=="OK","commit retry survives restart");}
+            auto submit=[&](Json entries){auto epoch=call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({alice})}},alice)["result"]["gameplay"];return call(s,"one","leaderboards.game.commit",{{"gameplay",epoch},{"entries",entries}},alice);};
+            auto row=rows[0];row["rating"]=50;
+            check(submit(Json::array({row}))["error"]=="OK","worse best score accepted without replacement");
+            check(call(s,"one","leaderboards.read",{{"key","BestScoreLifeTime"},{"mode",0},{"start",0},{"size",1}},alice)["result"]["entries"][0]["rating"]==350,"best aggregation retained");
+            row["mode"]=1;check(submit(Json::array({row}))["error"]=="OK","ascending score accepted");
+            check(call(s,"one","leaderboards.read",{{"key","BestScoreLifeTime"},{"mode",1},{"start",0},{"size",1}},alice)["result"]["entries"][0]["rating"]==50,"ascending best aggregation");
+            row["mode"]=2;check(submit(Json::array({row}))["error"]=="OK","latest board first write");row["rating"]=90;
+            check(submit(Json::array({row}))["error"]=="OK","latest board replacement");
+            check(call(s,"one","leaderboards.read",{{"key","BestScoreLifeTime"},{"mode",2},{"start",0},{"size",1}},alice)["result"]["entries"][0]["rating"]==90,"latest aggregation replaces worse score");
+            row["mode"]=3;check(submit(Json::array({row}))["error"]=="NOT_AUTHORIZED","local scope cannot write arbitrated board");
+            row["mode"]=0;row["userId"]=call(s,"one","profile.get",{{"gamertag","Bob"}},alice)["result"]["userId"];
+            check(submit(Json::array({row}))["error"]=="NOT_AUTHORIZED","scope cannot write nonmember row");
+            row=rows[0];row["columns"]["Rounds"]["type"]="int64";check(submit(Json::array({row}))["error"]=="INVALID_ARGUMENT","commit column schema enforced");
+            check(submit(Json::array({rows[0],rows[0]}))["error"]=="INVALID_ARGUMENT","duplicate commit row rejected");
+            rows[0]["rating"]=400;check(call(s,"one","leaderboards.game.commit",{{"gameplay",scope},{"entries",rows}},alice)["error"]=="INVALID_STATE","closed scope changed payload");
+            check(call(s,"one","leaderboards.game.begin",{{"kind","ranked"},{"participants",Json::array({alice})}},alice)["error"]=="NOT_SUPPORTED","unadvertised ranked scope");
+            check(call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({other})}},alice)["error"]=="NOT_AUTHORIZED","cross title participants");
+            check(call(s,"one","leaderboards.game.begin",{{"kind","local"},{"participants",Json::array({bob})}},alice)["error"]=="NOT_AUTHORIZED","owner missing membership");
             check(call(s,"one","auth.logout",Json::object(),alice)["error"]=="OK","logout");
             check(call(s,"one","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","revoked token");
             for(int i=0;i<10;++i)check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="AUTHENTICATION_FAILED","throttle threshold");
             check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="RATE_LIMITED","throttle");
         }
-        {Store db(path.string());db.exec("DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
-        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==3,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
-        {Store db(path.string());db.exec("PRAGMA user_version=4");}
+        {Store db(path.string());db.exec("DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
+        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==4,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
+        {Store db(path.string());db.exec("PRAGMA user_version=5");}
         bool refused=false;try{Store future(path.string());}catch(const Error& e){refused=e.code()=="UNSUPPORTED_DATABASE_VERSION";}
         check(refused,"future schema");clean();std::cout<<assertions<<" assertions passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
