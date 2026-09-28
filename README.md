@@ -7,7 +7,8 @@ The control-only PlayerMatch/Ranked session directory now supports authenticated
 membership, sparse property filtering, host revisions/leases and restart. CNA public online sessions,
 public online lifecycle integration, platform keychains, push events and
 avatar distribution remain unfinished. Private CNA ENet relay transport is now tested with real
-separate processes; NAT-isolated acceptance is the next task. The separate server WSS endpoint now forwards authenticated
+separate processes and independently NATed rootless namespaces; public online lifecycle and
+public Internet deployment acceptance are the next tasks. The separate server WSS endpoint now forwards authenticated
 bounded datagrams; that alone does not prove Internet multiplayer. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Original service code is MIT. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
@@ -203,3 +204,34 @@ The fixture owns temporary TLS/SQLite state and closes/kills its child processes
 No server business logic, schema/protocol version, accounts compatibility or license changes in
 this integration slice. Reconnect, isolated relay-only routing, public online sessions/invites,
 Ranked arbitration and standard avatar migration remain active tasks.
+
+GS-008d1 NAT isolation checkpoint (2026-09-28): the same real CNA/ENet probe now runs in two
+separate unprivileged user/network namespaces for each category/title. Independent slirp4netns
+helpers provide outbound NAT only, with no API socket or inbound port mappings. Namespace inodes
+must differ from the host and each other; each client verifies only loopback plus private
+10.0.2.100 and a tap0 default route through 10.0.2.2. HTTPS/WSS reaches the host-side service through
+that gateway with a matching test-certificate IP SAN. The two identical private addresses cannot
+identify/reach each other's ENet listener; game datagrams travel via authenticated TLS relay.
+This is relay-only NAT-isolation evidence on one Linux host, not a measured public Internet
+production deployment. No host routes, firewall, sysctl, desktop or installed package are changed.
+
+Optional test-only prerequisites: Linux enabled unprivileged user/network namespaces, `unshare`,
+`ip`, and the externally executed slirp4netns helper. Server/client production builds neither link
+nor require it. Use a system helper or configure an unpacked distribution binary:
+
+```sh
+CNA_SERVICE_RELAY_CLIENT_HARNESS=/absolute/CNA/build/cna_service_relay_client_harness \
+CNA_SERVICE_SLIRP4NETNS=/absolute/slirp4netns \
+CNA_SERVICE_SLIRP_LIBRARY_PATH=/optional/unpacked/library/path \
+ctest --test-dir build -R '^service_cna_relay_nat$' --output-on-failure
+```
+
+`CNA_SERVICE_SLIRP_LIBRARY_PATH` applies only to helper subprocesses; omit it for system packages.
+The test explicitly skips (77) if its prerequisites/kernel permission are absent, and never
+changes host policy to enable them. Each child/helper is reclaimed on failure. With all four CNA
+probes and helper configured, **11/11 CTest pass**, no skip, **137.21s**; ordinary native relay
+**7.76s**, NAT-isolated native relay **8.14s**, independent adversarial WSS **47.18s**.
+Tested external helper: Debian slirp4netns 1.2.1-1.1 with libslirp 4.8.0-1+deb13u1, unpacked in
+`/tmp` without installation. Original test orchestration remains MIT; external dependency notices
+are in THIRD_PARTY.md. Public NetworkSession/invites, reconnect and roster/async integration remain
+unfinished; NAT isolation does not complete those parent tasks.

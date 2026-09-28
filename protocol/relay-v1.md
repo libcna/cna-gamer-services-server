@@ -124,3 +124,17 @@ transactional; schema 7 and earlier preserve accounts/catalog/data, newer schema
 Transport implements TLS-only ticket messages, bounded handshake, one channel per machine,
 periodic revocation checks, queue/rate limits and source-authorized forwarding as specified above.
 Neither ticket issuance nor standalone WSS forwarding proves CNA ENet Internet multiplayer.
+
+## Measured connectivity boundary (GS-008d1)
+
+The first implemented client data path is relay-only: ENet listens on private loopback and each
+service-authorized remote machine maps to a stable local UDP bridge port. No peer IP is treated
+as proof of Internet reachability, and no direct-connect optimization is claimed. Verified WSS
+carries unchanged datagrams to the central relay; that relay injects authenticated source IDs.
+The native corpus exercises separate rootless Linux network namespaces with independent outbound
+NAT helpers, identical private addresses and no inbound mappings, for both categories/titles and
+multi-local identities. Reliable 32KiB application fragmentation and an unreliable channel pass.
+This is shared-host NAT-isolation evidence, not public Internet deployment/latency/failover proof.
+Public XNA online lifecycle, reconnect/resume and eventual direct/P2P optimization remain separate
+implementation/acceptance work. Test prerequisite absence is an explicit skip, not a passing NAT
+result. See README for reproduction and test-helper licensing.

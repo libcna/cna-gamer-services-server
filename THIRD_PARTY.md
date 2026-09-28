@@ -17,3 +17,11 @@ Dependencies are found through CMake/system packages; their licenses are indepen
 Preserve dependency notices when packaging their sources or libraries. This MIT grant applies
 to original server files; it does not replace the licenses of linked dependencies. Source SPDX
 labels consistently identify MIT.
+
+The optional Linux NAT-isolation test executes distribution `slirp4netns` as a separate process
+(GPL-2.0-or-later), using its separately licensed libslirp runtime (BSD-3-Clause/Expat notices).
+Neither helper code nor libraries are copied into or linked with this MIT service product.
+Tested packages are unpacked outside the repository, not redistributed here. Consult the
+[slirp4netns license](https://github.com/rootless-containers/slirp4netns/blob/master/COPYING) and
+[libslirp package notices](https://gitlab.freedesktop.org/slirp/libslirp) when separately packaging
+these test prerequisites. This does not change original server/protocol/test licensing.

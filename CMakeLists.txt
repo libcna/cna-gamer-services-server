@@ -82,3 +82,6 @@ set_tests_properties(service_relay_wss PROPERTIES TIMEOUT 120)
 # GS-008c2: independently provisioned real CNA TLS/ENet relay peers.
 add_test(NAME service_cna_relay COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_relay_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(service_cna_relay PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+add_test(NAME service_cna_relay_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_relay_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --isolated)
+set_tests_properties(service_cna_relay_nat PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
