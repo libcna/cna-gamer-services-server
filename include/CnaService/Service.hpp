@@ -16,6 +16,7 @@ public:
 private:
     Json dispatch(const Json& request, const std::string& peer);
     Json identity(const std::string& id);
+    Json readLeaderboard(const std::string& game,const Json& args);
     Store store_;
     std::mutex mutex_;
     struct Rate { long long start=0; int count=0; };

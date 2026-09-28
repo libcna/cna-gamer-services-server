@@ -46,6 +46,15 @@ int main() {
             (void)db.user("alice","alice-password","Alice");(void)db.user("bob","bob-password","Bob");
             Json achievement{{"key","first"},{"name","First"},{"description","An award"},{"howToEarn","Play"},{"score",10}};
             db.achievement("one",achievement);db.achievement("two",achievement);
+            Json board{{"key","BestScoreLifeTime"},{"mode",0},{"ascending",false},{"aggregation","best"},{"arbitrated",false},{"columns",{{"Rounds","int32"},{"Label","string"}}}};
+            db.leaderboard("one",board);db.leaderboard("two",board);board["mode"]=1;board["ascending"]=true;db.leaderboard("one",board);
+            for(const auto& tag:{"Alice","Bob"}) {
+                Json row{{"key","BestScoreLifeTime"},{"mode",0},{"gamertag",tag},{"rating",tag==std::string("Alice")?100LL:200LL},{"columns",{{"Rounds",{{"type","int32"},{"value",3}}},{"Label",{{"type","string"},{"value","Original"}}}}}};
+                db.seedLeaderboard("one",row);row["mode"]=1;db.seedLeaderboard("one",row);
+            }
+            bool refused=false;try{validateColumns({{"Rounds",{{"type","int64"},{"value",3}}}},board["columns"]);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}check(refused,"board column type");
+            refused=false;try{validateColumns({{"Rounds",{{"type","int32"},{"value",2147483648LL}}}},board["columns"]);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}check(refused,"board column range");
+            refused=false;try{validateColumns({{"unknown",{{"type","int32"},{"value",0}}}},board["columns"]);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}check(refused,"board undefined column");
         }
         std::string alice,bob,other;
         const std::string assetBytes="glTF"+std::string("\x02\0\0\0\x0c\0\0\0",8);
@@ -62,6 +71,17 @@ int main() {
             alice=call(s,"one","auth.login",{{"username","alice"},{"password","alice-password"}})["result"]["token"];
             bob=call(s,"one","auth.login",{{"username","bob"},{"password","bob-password"}})["result"]["token"];
             other=call(s,"two","auth.login",{{"username","alice"},{"password","alice-password"}})["result"]["token"];
+            Json read{{"key","BestScoreLifeTime"},{"mode",0},{"start",0},{"size",1}};
+            auto page=call(s,"one","leaderboards.read",read,alice)["result"];
+            check(page["total"]==2&&page["entries"].size()==1&&page["entries"][0]["gamertag"]=="Bob"&&page["entries"][0]["rank"]==1,"descending board");
+            read["start"]=1;page=call(s,"one","leaderboards.read",read,alice)["result"];
+            check(page["start"]==1&&page["entries"][0]["gamertag"]=="Alice"&&page["entries"][0]["columns"]["Rounds"]["value"]==3,"board second page/columns");
+            read["pivot"]="Alice";read["start"]=0;page=call(s,"one","leaderboards.read",read,alice)["result"];check(page["start"]==1,"centered board");
+            read["gamers"]=Json::array({"Alice"});page=call(s,"one","leaderboards.read",read,alice)["result"];check(page["total"]==1&&page["start"]==0&&page["entries"][0]["rank"]==2,"restricted board global rank");
+            read.erase("pivot");read["gamers"]=Json::array();check(call(s,"one","leaderboards.read",read,alice)["result"]["total"]==0,"empty gamer restriction");
+            read.erase("gamers");read["mode"]=1;check(call(s,"one","leaderboards.read",read,alice)["result"]["entries"][0]["gamertag"]=="Alice","ascending mode isolation");
+            read["mode"]=0;check(call(s,"two","leaderboards.read",read,other)["result"]["total"]==0,"title board isolation");
+            read["size"]=0;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board zero page");read["size"]=101;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board page cap");read["size"]=1;read["mode"]=2;check(call(s,"one","leaderboards.read",read,alice)["error"]=="NOT_FOUND","missing board");
             check(call(s,"two","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","token isolation");
             check(call(s,"one","achievements.award",{{"key","absent"}},alice)["error"]=="NOT_FOUND","invalid award");
             check(call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate")["error"]=="OK","award");
@@ -100,14 +120,15 @@ int main() {
         {
             Service s(path.string());
             check(call(s,"one","achievements.list",Json::object(),alice)["result"]["achievements"][0]["earnedTicks"]>0,"restart/auth persistence");
+            check(call(s,"one","leaderboards.read",{{"key","BestScoreLifeTime"},{"mode",0},{"start",0},{"size",2}},alice)["result"]["total"]==2,"board restart persistence");
             check(call(s,"one","auth.logout",Json::object(),alice)["error"]=="OK","logout");
             check(call(s,"one","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","revoked token");
             for(int i=0;i<10;++i)check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="AUTHENTICATION_FAILED","throttle threshold");
             check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="RATE_LIMITED","throttle");
         }
-        {Store db(path.string());db.exec("DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
-        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==2,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
-        {Store db(path.string());db.exec("PRAGMA user_version=3");}
+        {Store db(path.string());db.exec("DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
+        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==3,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
+        {Store db(path.string());db.exec("PRAGMA user_version=4");}
         bool refused=false;try{Store future(path.string());}catch(const Error& e){refused=e.code()=="UNSUPPORTED_DATABASE_VERSION";}
         check(refused,"future schema");clean();std::cout<<assertions<<" assertions passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

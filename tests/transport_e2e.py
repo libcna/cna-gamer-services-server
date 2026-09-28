@@ -23,6 +23,8 @@ def worker():
     assert entries[0]["earnedTicks"] == 0 or action == "award"
     if action == "award":
         assert request(url, ca, "one", "achievements.award", {"key": "first"}, token)["error"] == "OK"
+    page=request(url,ca,"one","leaderboards.read",{"key":"BestScoreLifeTime","mode":0,"start":1,"size":1},token)["result"]
+    assert page["total"]==2 and page["entries"][0]["gamertag"]=="Alice"
     pathlib.Path(state).write_text(json.dumps({"token": token}))
     os.chmod(state, 0o600)
 
@@ -63,6 +65,12 @@ def main():
         for user in ("alice", "bob"):
             subprocess.run([admin, str(db), "user", user, user.title()], input=user+"-password\n", text=True, check=True, stdout=subprocess.DEVNULL)
             subprocess.run([admin,str(db),"picture",user,image_hash],check=True)
+        for game in ("one","two"):
+            definition={"key":"BestScoreLifeTime","mode":0,"ascending":False,"aggregation":"best","arbitrated":False,"columns":{"Rounds":"int32","Label":"string","Total":"int64","Scale":"single","Precision":"double","When":"datetime","Duration":"timespan","Outcome":"outcome"}}
+            subprocess.run([admin,str(db),"leaderboard",game],input=json.dumps(definition),text=True,check=True)
+        for user,rating in (("Alice",100),("Bob",200)):
+            entry={"key":"BestScoreLifeTime","mode":0,"gamertag":user,"rating":rating,"columns":{"Rounds":{"type":"int32","value":3},"Label":{"type":"string","value":"Original"},"Total":{"type":"int64","value":9223372036854775807},"Scale":{"type":"single","value":1.25},"Precision":{"type":"double","value":2.5},"When":{"type":"datetime","value":123456},"Duration":{"type":"timespan","value":-1000},"Outcome":{"type":"outcome","value":1}}}
+            subprocess.run([admin,str(db),"seed-leaderboard","one"],input=json.dumps(entry),text=True,check=True)
         server = None
         def run_cna(url, username, state, action, game="one", password=None, trust=None):
             environment = os.environ.copy()
@@ -142,7 +150,7 @@ def main():
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
-        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery")
+        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns")
         print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, revocation, insecure public bind refusal")
 
 

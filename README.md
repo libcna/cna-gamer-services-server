@@ -1,6 +1,9 @@
 # cna-gamer-services-server
 
-Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Early implementation: persistent accounts/title-scoped revocable auth, profiles, directed friends/presence and achievement catalog/awards. No matchmaking/relay, refresh credentials, push events, asset download, leaderboards or avatar distribution yet. Do not call this complete or production-hardened.
+Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Partial implementation: persistent accounts/title-scoped revocable authentication, profiles,
+mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
+reads. Matchmaking/relay, refresh credentials, push events, gameplay leaderboard submission and
+avatar distribution remain unfinished. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Service code MS-PL as CNA. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
 
@@ -36,3 +39,15 @@ and run CTest. The test then includes two real CNA processes, standard Guide sig
 flows, rich presence, revocation, immutable picture streams/cache and server restart persistence.
 Without it, the TLS test still uses separate Python clients. Both are service/control tests, not
 Internet realtime multiplayer/relay evidence.
+
+
+Leaderboard catalog/read development (schema 3):
+
+```sh
+printf '%s' '{"key":"BestScoreLifeTime","mode":0,"ascending":false,"aggregation":"best","arbitrated":false,"columns":{"Rounds":"int32"}}' | build/cna-gamer-services-admin service.sqlite3 leaderboard my-title
+printf '%s' '{"key":"BestScoreLifeTime","mode":0,"gamertag":"Alice","rating":123,"columns":{"Rounds":{"type":"int32","value":3}}}' | build/cna-gamer-services-admin service.sqlite3 seed-leaderboard my-title
+```
+
+These administration seeds are fixtures. Online clients read persisted paged, centered or restricted
+boards; gameplay setters are transient until session-authorized commits are implemented. No Ranked,
+TrueSkill or EndGame submission capability is claimed yet. SQLite >=3.38 supplies JSON table filtering.

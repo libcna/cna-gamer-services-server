@@ -57,9 +57,20 @@ public:
     std::string asset(const std::string& game,const std::string& mime,std::string_view bytes);
     /** @brief Associates user picture. @param username Account. @param hash Existing asset hash. */
     void picture(const std::string& username,const std::string& hash);
+    /** @brief Defines immutable leaderboard policy. @param game Title. @param definition Policy. */
+    void leaderboard(const std::string& game,const Json& definition);
+    /** @brief Seeds development data through trusted administration. @param game Title.
+     * @param entry Definition identity, gamer, rating and typed columns. */
+    void seedLeaderboard(const std::string& game,const Json& entry);
 private:
     sqlite3* db_ = nullptr;
 };
+/** @brief Validates typed, bounded board columns against a provisioned schema.
+ * @param columns Typed data. @param schema Column type map. */
+void validateColumns(const Json& columns,const Json& schema);
+/** @brief Reads a bounded signed integer. @param object Container. @param key Field.
+ * @param minimum Lower bound. @param maximum Upper bound. @return Integer. */
+long long integerField(const Json& object,const char* key,long long minimum,long long maximum);
 /** @brief Generates secure random hex bytes. @param bytes Count. @return Hex encoding. */
 std::string randomHex(std::size_t bytes);
 /** @brief SHA-256 hashes bytes. @param bytes Input. @return Lowercase hex digest. */

@@ -27,9 +27,9 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","friend-requests","presence","achievements","assets"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","friend-requests","presence","achievements","assets","leaderboard-reads"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
@@ -137,6 +137,13 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         const auto bytes=asset.blob(2);constexpr char digits[]="0123456789abcdef";std::string encoded;encoded.reserve(bytes.size()*2);
         for(unsigned char byte:bytes){encoded+=digits[byte>>4];encoded+=digits[byte&15];}
         return Json{{"hash",hash},{"size",asset.number(0)},{"mime",asset.text(1)},{"offset",offset},{"hex",encoded}};
+    }
+    if(op=="leaderboards.read")return readLeaderboard(game,a);
+    if(op=="leaderboards.definition") {
+        Statement board(store_.db(),"SELECT ascending,aggregation,arbitrated,columns FROM leaderboards WHERE game_id=? AND key=? AND mode=?");
+        board.bind(1,game);board.bind(2,stringField(a,"key",64));board.bind(3,integerField(a,"mode",-2147483648LL,2147483647LL));
+        if(!board.row())throw Error("NOT_FOUND");
+        return Json{{"ascending",board.number(0)!=0},{"aggregation",board.text(1)},{"arbitrated",board.number(2)!=0},{"columns",parse(board.text(3))}};
     }
     if (op=="achievements.award") {
         const auto key=stringField(a,"key",64);if(!identifier(key))throw Error("INVALID_ARGUMENT");

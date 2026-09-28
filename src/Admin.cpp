@@ -14,6 +14,9 @@ int main(int argc,char** argv) {
         } else if(command=="achievement"&&argc==4) {
             std::string data((std::istreambuf_iterator<char>(std::cin)),{});
             store.achievement(argv[3],CnaService::parse(data));
+        } else if((command=="leaderboard"||command=="seed-leaderboard")&&argc==4) {
+            std::string data((std::istreambuf_iterator<char>(std::cin)),{});const auto value=CnaService::parse(data);
+            if(command=="leaderboard")store.leaderboard(argv[3],value);else store.seedLeaderboard(argv[3],value);
         } else if(command=="asset"&&argc==6) {
             if(std::filesystem::file_size(argv[5])>16777216)throw CnaService::Error("LIMIT_EXCEEDED");
             std::ifstream input(argv[5],std::ios::binary);if(!input)throw CnaService::Error("NOT_FOUND");
