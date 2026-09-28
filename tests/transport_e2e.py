@@ -150,6 +150,15 @@ def main():
                 run_cna(url,"bob","none","leaderboard-after")
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
+            credentials=request(url,str(ca),"one","auth.login",{"username":"alice","password":"alice-password"})["result"]
+            stop(server);server,url=start()
+            rotated=request(url,str(ca),"one","auth.refresh",{"refreshToken":credentials["refreshToken"]})["result"]
+            assert rotated["refreshToken"]!=credentials["refreshToken"] and rotated["refreshExpires"]==credentials["refreshExpires"]
+            assert request(url,str(ca),"one","auth.ping",token=credentials["token"])["error"]=="UNAUTHENTICATED"
+            assert request(url,str(ca),"one","auth.ping",token=rotated["token"])["error"]=="OK"
+            assert request(url,str(ca),"two","auth.refresh",{"refreshToken":rotated["refreshToken"]})["error"]=="UNAUTHENTICATED"
+            assert request(url,str(ca),"one","auth.refresh",{"refreshToken":credentials["refreshToken"]})["error"]=="UNAUTHENTICATED"
+            assert request(url,str(ca),"one","auth.ping",token=rotated["token"])["error"]=="UNAUTHENTICATED"
             assert request(url, str(ca), "one", "auth.logout", token=token)["error"] == "OK"
             assert request(url, str(ca), "one", "achievements.list", token=token)["error"] == "UNAUTHENTICATED"
         finally:
@@ -157,7 +166,7 @@ def main():
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
         if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns, LocalWithLeaderboards/EndGame final writes and restart persistence")
-        print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, revocation, insecure public bind refusal")
+        print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, rotating refresh/replay/title isolation/heartbeat, revocation, insecure public bind refusal")
 
 
 if __name__ == "__main__":

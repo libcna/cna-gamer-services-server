@@ -20,6 +20,9 @@ private:
     Json beginLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
     Json commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
     Json abortLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
+    Json issueCredentials(const std::string& user,const std::string& game,const std::string& family={});
+    Json refreshCredentials(const std::string& game,const Json& args);
+    void revokeFamily(const std::string& family);
     Store store_;
     std::mutex mutex_;
     struct Rate { long long start=0; int count=0; };

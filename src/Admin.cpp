@@ -27,7 +27,11 @@ int main(int argc,char** argv) {
                 CnaService::Statement s(store.db(),sql);(void)s.row();std::cout<<s.number(0)<<'\n';
             }
         } else if(command=="revoke-user"&&argc==4) {
-            CnaService::Statement s(store.db(),"DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE username=?)");s.bind(1,argv[3]);(void)s.row();
+            store.exec("BEGIN IMMEDIATE");
+            CnaService::Statement families(store.db(),"DELETE FROM refresh_families WHERE user_id=(SELECT id FROM users WHERE username=?)");families.bind(1,argv[3]);(void)families.row();
+            CnaService::Statement s(store.db(),"DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE username=?)");s.bind(1,argv[3]);(void)s.row();store.exec("COMMIT");
+        } else if(command=="expire-access"&&argc==4) {
+            CnaService::Statement s(store.db(),"UPDATE sessions SET expires=0 WHERE user_id=(SELECT id FROM users WHERE username=?)");s.bind(1,argv[3]);(void)s.row();
         } else if(command=="reset-earned"&&argc==4) {
             CnaService::Statement s(store.db(),"DELETE FROM earned WHERE game_id=?");s.bind(1,argv[3]);(void)s.row();
         } else throw CnaService::Error("INVALID_ARGUMENT");

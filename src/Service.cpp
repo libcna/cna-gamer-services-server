@@ -27,14 +27,14 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","friend-requests","presence","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
     const auto timestamp=now();
-    if (op!="auth.login") {
+    if (op!="auth.login"&&op!="auth.refresh") {
         const auto token=stringField(r,"token",128);
         if (token.size()!=64) throw Error("UNAUTHENTICATED");
         Statement session(store_.db(),"SELECT user_id FROM sessions WHERE hash=? AND game_id=? AND expires>?");
@@ -43,7 +43,7 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         user=session.text(0);
         Statement seen(store_.db(),"UPDATE sessions SET last_seen=? WHERE hash=?");seen.bind(1,timestamp);seen.bind(2,sha256(token));(void)seen.row();
     }
-    if (op=="auth.login") {
+    if (op=="auth.login"||op=="auth.refresh") {
         for (auto it=loginRates_.begin();it!=loginRates_.end();) {
             if (timestamp-it->second.start>=60) it=loginRates_.erase(it);else ++it;
         }
@@ -65,15 +65,15 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         if (!found || expected.size()!=computed.size() || CRYPTO_memcmp(expected.data(),computed.data(),computed.size())!=0)
             throw Error("AUTHENTICATION_FAILED");
         user=s.text(0);
-        Statement cap(store_.db(),"SELECT COUNT(*) FROM sessions WHERE user_id=? AND expires>?");cap.bind(1,user);cap.bind(2,timestamp);(void)cap.row();
-        if (cap.number(0)>=32) throw Error("LIMIT_EXCEEDED");
-        const auto token=randomHex(32);
-        Statement insert(store_.db(),"INSERT INTO sessions(hash,user_id,game_id,expires,last_seen) VALUES(?,?,?,?,?)");
-        insert.bind(1,sha256(token));insert.bind(2,user);insert.bind(3,game);insert.bind(4,timestamp+3600);insert.bind(5,timestamp);(void)insert.row();
-        return Json{{"identity",identity(user)},{"token",token},{"expires",timestamp+3600}};
+        return issueCredentials(user,game);
     }
+    if(op=="auth.refresh")return refreshCredentials(game,a);
+    if(op=="auth.ping")return Json{{"serverTime",timestamp}};
     if (op=="auth.logout") {
-        Statement s(store_.db(),"DELETE FROM sessions WHERE hash=?");s.bind(1,sha256(stringField(r,"token",128)));(void)s.row();return Json::object();
+        const auto hash=sha256(stringField(r,"token",128));Statement scope(store_.db(),"SELECT refresh_family FROM sessions WHERE hash=?");scope.bind(1,hash);(void)scope.row();
+        const auto family=scope.text(0);if(!family.empty())revokeFamily(family);
+        else {Statement remove(store_.db(),"DELETE FROM sessions WHERE hash=?");remove.bind(1,hash);(void)remove.row();}
+        return Json::object();
     }
     if (op=="gamer.lookup" || op=="profile.get") {
         const auto gamertag=stringField(a,"gamertag",32);

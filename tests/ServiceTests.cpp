@@ -170,9 +170,43 @@ int main() {
             for(int i=0;i<10;++i)check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="AUTHENTICATION_FAILED","throttle threshold");
             check(call(s,"one","auth.login",{{"username","absent"},{"password","wrong-password"}})["error"]=="RATE_LIMITED","throttle");
         }
-        {Store db(path.string());db.exec("DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
-        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==4,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
-        {Store db(path.string());db.exec("PRAGMA user_version=5");}
+        {
+            Service s(path.string());
+            auto login=call(s,"one","auth.login",{{"username","alice"},{"password","alice-password"}})["result"];
+            const auto access=login["token"].get<std::string>(),refresh=login["refreshToken"].get<std::string>();
+            check(access.size()==64&&refresh.size()==64&&access!=refresh,"independent access/refresh credentials");
+            check(call(s,"one","auth.ping",Json::object(),access)["error"]=="OK","authenticated heartbeat");
+            auto rotated=call(s,"one","auth.refresh",{{"refreshToken",refresh}})["result"];
+            check(rotated["refreshToken"]!=refresh&&rotated["token"]!=access&&rotated["refreshExpires"]==login["refreshExpires"],"refresh rotates without extending lifetime");
+            const auto current=rotated["token"].get<std::string>();
+            check(call(s,"one","auth.ping",Json::object(),access)["error"]=="UNAUTHENTICATED","earlier access retired");
+            {Service restarted(path.string());check(call(restarted,"one","auth.ping",Json::object(),current)["error"]=="OK","rotated access survives restart");}
+            check(call(s,"two","auth.refresh",{{"refreshToken",rotated["refreshToken"]}})["error"]=="UNAUTHENTICATED","refresh title isolation");
+            check(call(s,"one","auth.ping",Json::object(),current)["error"]=="OK","wrong-title attempt does not revoke family");
+            check(call(s,"one","auth.refresh",{{"refreshToken",refresh}})["error"]=="UNAUTHENTICATED","refresh replay rejected");
+            check(call(s,"one","auth.ping",Json::object(),current)["error"]=="UNAUTHENTICATED","replay revokes rotated access");
+            check(call(s,"one","auth.refresh",{{"refreshToken",rotated["refreshToken"]}})["error"]=="UNAUTHENTICATED","replay revokes current refresh");
+            check(call(s,"one","auth.ping",Json::object(),bob)["error"]=="OK","replay does not revoke other user");
+            check(call(s,"two","auth.ping",Json::object(),other)["error"]=="OK","replay does not revoke other title/device");
+            auto logout=call(s,"one","auth.login",{{"username","alice"},{"password","alice-password"}})["result"];
+            check(call(s,"one","auth.logout",Json::object(),logout["token"])["error"]=="OK","refresh family logout");
+            check(call(s,"one","auth.refresh",{{"refreshToken",logout["refreshToken"]}})["error"]=="UNAUTHENTICATED","logout revokes refresh authority");
+        }
+        {
+            Service s(path.string());auto credentials=call(s,"one","auth.login",{{"username","alice"},{"password","alice-password"}})["result"];
+            {Store db(path.string());db.exec("UPDATE sessions SET expires=0 WHERE user_id=(SELECT id FROM users WHERE username='alice');");}
+            check(call(s,"one","auth.ping",Json::object(),credentials["token"])["error"]=="UNAUTHENTICATED","expired access rejected");
+            auto restored=call(s,"one","auth.refresh",{{"refreshToken",credentials["refreshToken"]}});
+            check(restored["error"]=="OK","refresh renews expired access");
+            {Store db(path.string());db.exec("UPDATE refresh_families SET expires=0 WHERE user_id=(SELECT id FROM users WHERE username='alice');");}
+            check(call(s,"one","auth.refresh",{{"refreshToken",restored["result"]["refreshToken"]}})["error"]=="UNAUTHENTICATED","expired refresh rejected");
+            check(call(s,"one","auth.refresh",{{"refreshToken","malformed"}})["error"]=="UNAUTHENTICATED","malformed refresh rejected");
+            for(int i=0;i<6;++i)check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="UNAUTHENTICATED","refresh throttle threshold");
+            check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="RATE_LIMITED","refresh source rate limit");
+        }
+        {Store db(path.string());db.exec("DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
+        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==5,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
+        {Store db(path.string());db.exec("PRAGMA user_version=6");}
         bool refused=false;try{Store future(path.string());}catch(const Error& e){refused=e.code()=="UNSUPPORTED_DATABASE_VERSION";}
         check(refused,"future schema");clean();std::cout<<assertions<<" assertions passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

@@ -2,7 +2,8 @@
 
 Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Partial implementation: persistent accounts/title-scoped revocable authentication, profiles,
 mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
-reads and authenticated local gameplay commits. Matchmaking/relay, refresh credentials, push events and
+reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
+Matchmaking/relay, client credential persistence, push events and
 avatar distribution remain unfinished. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Service code MS-PL as CNA. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
@@ -57,3 +58,13 @@ SQLite >=3.38 supplies JSON table filtering.
 
 Original server source, protocol and tests use the [MIT license](LICENCE). See
 [dependency notices](THIRD_PARTY.md) for the independently licensed transport/database/JSON libraries.
+
+
+Schema 5 adds hashed rotating access/refresh families (30-day absolute refresh lifetime, one-hour
+access tokens), replay-family revocation and authenticated heartbeat. Normal logout revokes its
+refresh family; `revoke-user` covers all user families and legacy access. Development
+`build/cna-gamer-services-admin service.sqlite3 expire-access alice` expires Alice's access tokens
+while preserving refresh authority, for maintenance/reconnect tests. Client automatic persistence/
+refresh is still GS-004c; the server does not supply the endpoint before clients connect. Lost
+rotation responses can require fresh Guide sign-in. No credential logging or plaintext bearer
+persistence on the server. See the canonical protocol for caps, migration and security semantics.
