@@ -37,4 +37,4 @@ add_test(NAME service_unit COMMAND service_tests)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME service_tls_e2e COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/transport_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
-set_tests_properties(service_tls_e2e PROPERTIES TIMEOUT 60)
+set_tests_properties(service_tls_e2e PROPERTIES TIMEOUT 120)

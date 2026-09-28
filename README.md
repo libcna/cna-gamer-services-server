@@ -3,10 +3,10 @@
 Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Partial implementation: persistent accounts/title-scoped revocable authentication, profiles,
 mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
 reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
-Matchmaking/relay, client credential persistence, push events and
+Matchmaking/relay, platform keychains, push events and
 avatar distribution remain unfinished. Do not call this complete or production-hardened.
 
-Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Service code MS-PL as CNA. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
+Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Original service code is MIT. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
 
 ```sh
 CCACHE_DIR=/rv/cnaccache CCACHE_BASEDIR=/rv cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -50,7 +50,7 @@ printf '%s' '{"key":"BestScoreLifeTime","mode":0,"gamertag":"Alice","rating":123
 ```
 
 These administration seeds are fixtures. Online clients read persisted paged, centered or restricted
-boards; gameplay setters are transient until session-authorized commits are implemented. No Ranked,
+boards; gameplay setters are transient and authorized local commits flush at EndGame or explicit early leave. No Ranked,
 TrueSkill or Ranked arbitration capability is claimed yet. Schema 4 adds authenticated local game
 epochs and atomic/idempotent EndGame/early-leave commits; authenticated abort releases interrupted
 epochs. Offline crash cleanup is best effort and expires by the documented quota/lifetime.
@@ -64,7 +64,8 @@ Schema 5 adds hashed rotating access/refresh families (30-day absolute refresh l
 access tokens), replay-family revocation and authenticated heartbeat. Normal logout revokes its
 refresh family; `revoke-user` covers all user families and legacy access. Development
 `build/cna-gamer-services-admin service.sqlite3 expire-access alice` expires Alice's access tokens
-while preserving refresh authority, for maintenance/reconnect tests. Client automatic persistence/
-refresh is still GS-004c; the server does not supply the endpoint before clients connect. Lost
+while preserving refresh authority, for maintenance/reconnect tests. CNA now consumes refresh, pumps heartbeat, and can resume four local slots from private POSIX
+user storage. Other client platforms retain ephemeral credentials pending a secure provider. The
+server does not supply the endpoint before clients connect. Lost
 rotation responses can require fresh Guide sign-in. No credential logging or plaintext bearer
 persistence on the server. See the canonical protocol for caps, migration and security semantics.

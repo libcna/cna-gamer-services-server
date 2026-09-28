@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Real TLS listener, independent client processes and restart persistence."""
-import json, os, pathlib, ssl, subprocess, sys, tempfile, urllib.request, struct, zlib, hashlib, selectors
+import json, os, pathlib, ssl, subprocess, sys, tempfile, urllib.request, urllib.parse, sqlite3, struct, zlib, hashlib, selectors
 
 
 def request(url, ca, game, op, args=None, token=None):
@@ -62,7 +62,7 @@ def main():
             assert imported==image_hash
             definition = {"picture": image_hash, "key": "first", "name": "First", "description": "Test award", "howToEarn": "Play", "score": 10}
             subprocess.run([admin, str(db), "achievement", game], input=json.dumps(definition), text=True, check=True)
-        for user in ("alice", "bob"):
+        for user in ("alice", "bob", "charlie", "dana"):
             subprocess.run([admin, str(db), "user", user, user.title()], input=user+"-password\n", text=True, check=True, stdout=subprocess.DEVNULL)
             subprocess.run([admin,str(db),"picture",user,image_hash],check=True)
         for game in ("one","two"):
@@ -72,17 +72,19 @@ def main():
             entry={"key":"BestScoreLifeTime","mode":0,"gamertag":user,"rating":rating,"columns":{"Rounds":{"type":"int32","value":3},"Label":{"type":"string","value":"Original"},"Total":{"type":"int64","value":9223372036854775807},"Scale":{"type":"single","value":1.25},"Precision":{"type":"double","value":2.5},"When":{"type":"datetime","value":123456},"Duration":{"type":"timespan","value":-1000},"Outcome":{"type":"outcome","value":1}}}
             subprocess.run([admin,str(db),"seed-leaderboard","one"],input=json.dumps(entry),text=True,check=True)
         server = None
-        def run_cna(url, username, state, action, game="one", password=None, trust=None):
+        main_refresh = None
+        def run_cna(url, username, state, action, game="one", password=None, trust=None, credentials=None):
             environment = os.environ.copy()
             environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID=game,
                                CNA_GAMER_SERVICES_CA_BUNDLE=str(ca) if trust is None else trust,
-                               CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"))
+                               CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_CREDENTIALS_DIR="0")
+            if credentials:environment["CNA_GAMER_SERVICES_CREDENTIALS_DIR"]=str(credentials)
             environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
             subprocess.run([client, "--real", username, state, action],
-                           input=(password or username+"-password")+"\n", text=True,
+                           input=(("alice-password\nbob-password\ncharlie-password\ndana-password\n") if action=="remember-four" else (password or username+"-password")+"\n"), text=True,
                            env=environment, check=True, timeout=45)
-        def start():
-            process = subprocess.Popen([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "127.0.0.1", "--port", "0", "--cert", str(ca), "--key", str(key)], stdout=subprocess.PIPE, text=True)
+        def start(port=0):
+            process = subprocess.Popen([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "127.0.0.1", "--port", str(port), "--cert", str(ca), "--key", str(key)], stdout=subprocess.PIPE, text=True)
             line = process.stdout.readline(); assert "listening" in line
             return process, "https://localhost:"+line.strip().rsplit(":", 1)[1]+"/cna/v1"
         def stop(process):
@@ -119,7 +121,7 @@ def main():
                 assert cached.read_bytes()==image, "corrupt immutable cache must be replaced"
                 run_cna(url, "alice", "earned", "request")
                 environment = os.environ.copy()
-                environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(ca), CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"))
+                environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(ca), CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_CREDENTIALS_DIR="0")
                 environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
                 for user, action, ready in (("bob", "presence-wait", "READY_PRESENCE"), ("alice", "revoke-wait", "READY_REVOKE")):
                     process = subprocess.Popen([client, "--real", user, "none" if user=="bob" else "earned", action], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=environment)
@@ -134,20 +136,68 @@ def main():
                         print(output.strip())
                     finally:
                         if process.poll() is None: process.kill();process.wait()
+            if client or c_client:
+                stop(server);server,url=start()
             if client:
-                token = request(url, str(ca), "one", "auth.login", {"username":"alice", "password":"alice-password"})["result"]["token"]
+                main_credentials = request(url, str(ca), "one", "auth.login", {"username":"alice", "password":"alice-password"})["result"]
+                token = main_credentials["token"]
+                main_refresh = main_credentials["refreshToken"]
             if c_client:
                 for user,state in (("alice","earned"),("bob","none")):
                     environment=os.environ.copy()
-                    environment.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID="one",CNA_GAMER_SERVICES_CA_BUNDLE=str(ca),CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+                    environment.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID="one",CNA_GAMER_SERVICES_CA_BUNDLE=str(ca),CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0",CNA_GAMER_SERVICES_CREDENTIALS_DIR="0")
                     environment.pop("DISPLAY",None);environment["WAYLAND_DISPLAY"]=""
                     subprocess.run([c_client,user,state],input=user+"-password\n",text=True,env=environment,check=True,timeout=30)
             if client:
                 stop(server);server,url=start()
+                user_store=root/"credentials"
+                run_cna(url,"alice","earned","remember",credentials=user_store)
+                records=list(user_store.glob("*.json"));assert len(records)==1
+                assert user_store.stat().st_mode&0o777==0o700 and records[0].stat().st_mode&0o777==0o600
+                assert set(json.loads(records[0].read_text()))=={"v","expires","refreshToken"}
+                port=urllib.parse.urlsplit(url).port
+                stop(server);server,url=start(port)
+                run_cna(url,"alice","earned","resume",credentials=user_store)
+                assert not list(user_store.glob("*.json")),"explicit signout must clear refresh authority"
+                run_cna(url,"alice","earned","remember-four",credentials=user_store)
+                assert len(list(user_store.glob("*.json")))==4,"four separate local refresh slots"
+                port=urllib.parse.urlsplit(url).port;stop(server);server,url=start(port)
+                run_cna(url,"alice","earned","resume-four",credentials=user_store)
+                assert len(list(user_store.glob("*.json")))==3,"signout removes only its local slot"
+                # A live XNA client pumps maintenance, retains identity on outage, and reconnects.
+                environment=os.environ.copy()
+                environment.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID="one",CNA_GAMER_SERVICES_CA_BUNDLE=str(ca),CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_CREDENTIALS_DIR="0",CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+                environment.pop("DISPLAY",None);environment["WAYLAND_DISPLAY"]=""
+                live=subprocess.Popen([client,"--real","alice","earned","maintenance"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,env=environment)
+                def line(expected):
+                    ready=selectors.DefaultSelector();ready.register(live.stdout,selectors.EVENT_READ)
+                    try:
+                        assert ready.select(45),"maintenance client stalled"
+                        assert live.stdout.readline().strip()==expected,"maintenance client phase"
+                    finally:ready.close()
+                def advance():live.stdin.write("continue\n");live.stdin.flush()
+                try:
+                    live.stdin.write("alice-password\n");live.stdin.flush();line("maintenance-ready")
+                    subprocess.run([admin,str(db),"expire-access","alice"],check=True)
+                    advance();line("maintenance-refreshed")
+                    with sqlite3.connect(db) as inspect:inspect.execute("UPDATE sessions SET last_seen=0 WHERE user_id=(SELECT id FROM users WHERE username='alice')")
+                    advance();line("maintenance-heartbeat")
+                    with sqlite3.connect(db) as inspect:
+                        assert inspect.execute("SELECT MAX(last_seen) FROM sessions WHERE user_id=(SELECT id FROM users WHERE username='alice')").fetchone()[0]>0,"Update heartbeat must maintain online activity"
+                    port=urllib.parse.urlsplit(url).port;stop(server);server=None
+                    advance();line("maintenance-offline")
+                    server,url=start(port);advance()
+                    live.stdin.close();assert live.wait(timeout=15)==0,"maintenance/reconnect client"
+                finally:
+                    if live.poll() is None:live.kill();live.wait()
+                    live.stdout.close()
+
                 run_cna(url,"alice","earned","leaderboard-write")
                 stop(server);server,url=start()
                 run_cna(url,"alice","earned","leaderboard-after")
                 run_cna(url,"bob","none","leaderboard-after")
+            if main_refresh:
+                token = request(url, str(ca), "one", "auth.refresh", {"refreshToken":main_refresh})["result"]["token"]
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
             credentials=request(url,str(ca),"one","auth.login",{"username":"alice","password":"alice-password"})["result"]
@@ -165,7 +215,7 @@ def main():
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
-        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns, LocalWithLeaderboards/EndGame final writes and restart persistence")
+        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, four local accounts and private refresh persistence/resume, expiry renewal, Update heartbeat, outage/reconnect without identity duplication, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery, remote leaderboard paging/centering/restricted reads and typed columns, LocalWithLeaderboards/EndGame final writes and restart persistence")
         print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, rotating refresh/replay/title isolation/heartbeat, revocation, insecure public bind refusal")
 
 

@@ -39,7 +39,7 @@ Json Service::issueCredentials(const std::string& user,const std::string& game,c
         Statement credential(store_.db(),"INSERT INTO refresh_credentials(hash,family_id) VALUES(?,?)");credential.bind(1,sha256(refresh));credential.bind(2,family);(void)credential.row();
         store_.exec("COMMIT");
     }catch(...){store_.exec("ROLLBACK");throw;}
-    return Json{{"identity",identity(user)},{"token",token},{"expires",expires},{"refreshToken",refresh},{"refreshExpires",refreshExpires}};
+    return Json{{"identity",identity(user)},{"serverTime",timestamp},{"token",token},{"expires",expires},{"refreshToken",refresh},{"refreshExpires",refreshExpires}};
 }
 Json Service::refreshCredentials(const std::string& game,const Json& args) {
     const auto credential=stringField(args,"refreshToken",64);
