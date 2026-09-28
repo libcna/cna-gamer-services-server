@@ -2,6 +2,7 @@
 #pragma once
 #include "CnaService/Store.hpp"
 #include <mutex>
+#include "CnaService/RelayAuthorization.hpp"
 #include <map>
 namespace CnaService {
 /** @brief Title-isolated logical service; transport-independent. */
@@ -13,7 +14,19 @@ public:
      * @param bytes Request bytes. @param peer Server-derived source identity.
      * @return Response bytes. */
     std::string handle(std::string_view bytes,std::string_view peer);
+    /** @brief Redeems short-lived one-use authority on an encrypted relay connection.
+     * @param game Title. @param ticket Secret from HTTPS; never logged. @return Server-owned grant. */
+    RelayGrant redeemRelayTicket(const std::string& game,const std::string& ticket);
+    /** @brief Revalidates membership, title, every local account and revocable authority.
+     * @param grant Server-owned grant. @return Whether connection remains authorized. */
+    bool validateRelayGrant(const RelayGrant& grant);
+    /** @brief Releases a disconnected grant without touching account/directory state.
+     * @param grant Exact server-owned grant. */
+    void releaseRelayGrant(const RelayGrant& grant);
 private:
+    Json issueRelayTicket(const std::string& user,const std::string& game,const Json& args);
+    bool validateRelayGrantLocked(const RelayGrant& grant,bool redeemed);
+    void pruneRelayTickets();
     Json dispatch(const Json& request, const std::string& peer);
     Json identity(const std::string& id);
     Json readLeaderboard(const std::string& game,const Json& args);

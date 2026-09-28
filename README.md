@@ -132,3 +132,17 @@ Service/directory/invitation/relay unit gate **4/4 passed in 7.52s**, clean `-We
 CNA independently runs the same golden corpus and a mutation suite and checks exact source drift.
 This slice does not implement a WebSocket endpoint, authentication tickets or forwarding, does not
 advertise relay capability and does not prove Internet multiplayer. Those are immediate next tasks.
+
+GS-008a2 schema 8 adds SHA-256-only one-use 60s relay ticket records and server-owned connection
+grants for the exact title/session/machine/local group. All local users must supply live credentials;
+only the machine owner may request authority. Grants bind revocable refresh families so normal
+access-token rotation is safe, and revalidation rejects family expiry/revocation, privilege loss,
+leave/host expiry and grant expiry. Prepared queries/transactional consumption, release and
+per-machine/title caps are covered by **60 authority assertions**. Back up before schema upgrade.
+
+Full integration with configured native C++/C/directory CNA probes: **7/7 CTest passed in 74.10s**:
+5,217 service assertions; 99 directory; 153 invitations; 10,027 relay framing; 60 authority;
+general TLS 57.18s; two-CNA control/ticket issuance 6.53s (32 join/17 host checks per kind).
+Clean `-Werror` build, no skipped test. Capability `relay-tickets` means issuance only; WSS forwarding
+and Internet realtime connectivity are still pending and `relay` is not advertised. See
+[relay authority contract](protocol/relay-v1.md).

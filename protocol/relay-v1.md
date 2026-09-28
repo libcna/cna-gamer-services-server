@@ -1,8 +1,8 @@
 # CNA realtime relay protocol v1
 
 This CNA-owned protocol/accounts/assets are not Xbox LIVE compatible. This document defines
-bounded relay framing only at GS-008a1. The WSS endpoint, authentication tickets and forwarding
-are the next slices; no relay capability or Internet connectivity is currently implemented.
+bounded framing and relay ticket/grant authority through GS-008a2. The WSS endpoint and forwarding
+are the next slices; no relay data capability or Internet connectivity is currently implemented.
 Canonical codec: `protocol/include/CnaService/RelayProtocol.hpp`, `src/RelayProtocol.cpp`;
 golden corpus `protocol/golden/relay-v1.json`. CNA copies these artifacts exactly and tests drift.
 
@@ -53,3 +53,33 @@ checks, per-connection read/write serialization, bounded queues/backpressure and
 Reconnect needs a fresh ticket. Advertise relay only after the endpoint actually forwards data.
 Test genuine multi-process ENet under relay-only isolation/firewall restrictions before any Internet
 multiplayer claim; localhost membership tests alone do not meet that criterion.
+
+## Ticket and connection authority (implemented GS-008a2)
+
+Capability `relay-tickets` covers HTTPS `sessions.relayTicket {session,participants}`. It is
+separate from a working `relay` capability (not yet advertised). `participants` contains 1..4
+current authenticated title-bound access credentials matching the machine's complete directory
+group; actor must own that machine. Secondary/nonmembers/partial/foreign/duplicate/revoked
+groups fail before issuance. Result exactly `{ticket,session,machine,expires,serverTime,relayVersion,
+maxDatagramBytes}`: random 256-bit bearer ticket, <=60s lifetime, protocol 1/4,096-byte ceiling.
+Never log/persist plaintext tickets; server SQLite schema 8 stores only SHA-256 ticket hashes.
+
+Encrypted connection redemption requires title plus ticket, checks all group members and consumes
+it exactly once transactionally. Wrong title, unknown/expired/used/malformed credentials fail
+UNAUTHENTICATED. The resulting server-owned grant is not accepted as a network credential.
+Grant authority binds all local accounts' revocable refresh families, exact session/machine/owner
+and directory membership. Ordinary access rotation preserves it; family revocation/expiry, online
+privilege loss, group departure or host lease expiration invalidates it. One-hour grant ceiling
+requires reconnect with fresh ticket; grant release deletes only the exact disconnected grant.
+
+Unconsumed tickets may survive server restart until their short expiry; used tickets cannot be
+replayed. Open data connections do not survive a server process restart and need fresh authority.
+Limits: 8 outstanding ticket/grant records per machine, 8,192 per title; expired unused/grants are
+pruned before issuance/redemption/validation. Disconnect release prevents repeated normal reconnect
+from accumulating grants; abandoned used records expire within an hour. Existing host/machine
+90s directory leases remain authoritative and a ticket does not extend them. Migrations are
+transactional; schema 7 and earlier preserve accounts/catalog/data, newer schema is refused.
+
+Transport still must implement TLS-only ticket messages, bounded handshake, one channel per
+machine, periodic revocation checks, queue/rate limits and source-authorized forwarding. Issuing
+a ticket alone is not a realtime connection or proof of Internet multiplayer.
