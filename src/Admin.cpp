@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include "CnaService/Avatars.hpp"
 #include "CnaService/Store.hpp"
+#include <map>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -22,6 +24,45 @@ int main(int argc,char** argv) {
             std::ifstream input(argv[5],std::ios::binary);if(!input)throw CnaService::Error("NOT_FOUND");
             std::string bytes((std::istreambuf_iterator<char>(input)),{});std::cout<<store.asset(argv[3],argv[4],bytes)<<'\n';
         } else if(command=="picture"&&argc==5) {store.picture(argv[3],argv[4]);
+        } else if(command=="avatar-catalog"&&argc==4) {
+            // Imports a CNA avatar catalog directory (tools/avatar_builder/generate_avatar_catalog.py).
+            const std::filesystem::path directory(argv[3]);
+            std::ifstream manifestFile(directory/"catalog.json",std::ios::binary);if(!manifestFile)throw CnaService::Error("NOT_FOUND");
+            const std::string manifest((std::istreambuf_iterator<char>(manifestFile)),{});
+            if(manifest.size()>1048576)throw CnaService::Error("LIMIT_EXCEEDED");
+            std::map<std::string,std::string> files;
+            const auto parsed=CnaService::parse(manifest);
+            for(const auto& entry:parsed.at("assets")) {
+                const auto name=CnaService::stringField(entry,"name",64);
+                if(name.find('/')!=std::string::npos||name.find("..")!=std::string::npos)throw CnaService::Error("INVALID_ARGUMENT");
+                const auto path=directory/name;
+                if(!std::filesystem::is_regular_file(path)||std::filesystem::file_size(path)>(8u<<20))throw CnaService::Error("INVALID_ARGUMENT");
+                std::ifstream input(path,std::ios::binary);
+                files[name]=std::string((std::istreambuf_iterator<char>(input)),{});
+            }
+            std::cout<<CnaService::importAvatarCatalog(store,manifest,files)<<'\n';
+        } else if(command=="avatar"&&(argc==5||argc==6)) {
+            // avatar <username> random [female|male] | clear | set (hex description on stdin)
+            const std::string action=argv[4];
+            if(action=="clear"&&argc==5)CnaService::setAvatar(store,argv[3],std::nullopt);
+            else if(action=="set"&&argc==5) {
+                std::string hex;std::getline(std::cin,hex);
+                if(hex.size()!=CnaService::AvatarDescriptionSize*2)throw CnaService::Error("INVALID_ARGUMENT");
+                std::string bytes;
+                for(std::size_t i=0;i<hex.size();i+=2) {
+                    const auto digit=[](char c)->int{return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1;};
+                    const int high=digit(hex[i]),low=digit(hex[i+1]);
+                    if(high<0||low<0)throw CnaService::Error("INVALID_ARGUMENT");
+                    bytes+=static_cast<char>(high<<4|low);
+                }
+                CnaService::setAvatar(store,argv[3],bytes);
+            }
+            else if(action=="random") {
+                std::optional<int> body;
+                if(argc==6)body=std::string(argv[5])=="male"?1:std::string(argv[5])=="female"?0:-1;
+                if(body&&*body<0)throw CnaService::Error("INVALID_ARGUMENT");
+                CnaService::setAvatar(store,argv[3],CnaService::randomAvatarDescription(store.db(),body));
+            } else throw CnaService::Error("INVALID_ARGUMENT");
         } else if(command=="inspect"&&argc==3) {
             for(const auto* sql:{"SELECT COUNT(*) FROM users","SELECT COUNT(*) FROM titles","SELECT COUNT(*) FROM sessions","SELECT COUNT(*) FROM earned"}) {
                 CnaService::Statement s(store.db(),sql);(void)s.row();std::cout<<s.number(0)<<'\n';

@@ -150,7 +150,7 @@ int main() {
         const auto otherSession=call(*service,"sessions.create",otherCreate,other,"two");check(otherSession["error"]=="OK","independent title directory fixture");
         check(call(*service,"invites.send",{{"session",otherSession["result"]["session"]},{"gamertag","dana"}},other,"two")["error"]=="OK","one title cannot exhaust another invitation budget");
         check(call(*service,"sessions.leave",{{"session",resourceSession}},tokens[0])["error"]=="OK","resource fixture cleanup");
-        {Store store(path.string());Statement version(store.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==11,"schema migration version");}
+        {Store store(path.string());Statement version(store.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==12,"schema migration version");}
         service.reset();clean();std::cout<<checks<<" invitation assertions passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

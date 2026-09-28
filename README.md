@@ -357,3 +357,24 @@ retried, and the session continues through data exchange, StartGame/EndGame, lea
 Ranked arbitration and departure. A reliable round trip precedes the data phase; right after the
 restart the one unreliable packet may be dropped by ENet's throttle, all reliable ones must arrive.
 Full corpus with every probe and the NAT helper: **20/20, zero skips, 340.73s**.
+
+### Avatars (schema 12, capability `avatars`)
+
+Each account can own one avatar description in CNA's v1 encoding; the service validates it against
+the avatar catalogs imported here. Import CNA's generated catalog, then give accounts avatars:
+
+```sh
+cna-gamer-services-admin state.sqlite3 avatar-catalog /path/to/CNA/modules/gamer-services/assets/avatars/v1
+cna-gamer-services-admin state.sqlite3 avatar alice random male     # or: female | clear | set (hex on stdin)
+```
+
+Catalog files are served from the immutable asset store by hash, so a CNA client that lacks an
+item of a newer catalog downloads, verifies and caches just that file. `service_cna_avatars` proves
+it with the standard XNA API: own, looked-up and absent descriptions, and a v2-only item fetched,
+cached and rendered Ready:
+
+```sh
+CNA_SERVICE_AVATAR_CLIENT_HARNESS=/absolute/CNA/build/cna_service_avatar_client_harness \
+CNA_AVATAR_CATALOG_DIR=/absolute/CNA/modules/gamer-services/assets/avatars/v1 \
+ctest --test-dir build -R '^service_cna_avatars$' --output-on-failure
+```
