@@ -253,3 +253,15 @@ invited groups. Accepted invitations remain unconsumed on refusal. Existing iden
 replay supports control idempotence without adding members. Migration repairs old true flags
 and advances revision while preserving participants. Back up databases before upgrading;
 normal server/admin open applies the migration transactionally. No control/CNR version change.
+
+GS-007e2c2 extends the same native directory test with owned preparation on CNA's service worker:
+acquire and validate membership, issue a one-use relay ticket, allocate a bounded loopback ENet
+host and wait for verified WSS readiness. Two local accounts retain the origin backend; an
+abandoned ready result closes transport and releases membership. Injected transport failures
+also roll back actual persisted host/join membership, checked by subsequent control reads/search.
+Successful ordinary and accepted invited preparations release only their own machine group.
+Completion runs at the client Update boundary. Cleanup during an outage can fail and then relies
+on the 90-second membership lease; client destruction can wait for bounded I/O. This preparation
+test does not establish ENet welcome completion or public NetworkSession Create/Join behavior;
+those remain the next integration step. The separate relay tests continue to provide actual
+ENet payload and isolated-NAT evidence.

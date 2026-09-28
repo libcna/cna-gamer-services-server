@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Two genuine CNA processes: TLS directory/invites/restart and expired multi-local credentials.
+"""Two genuine CNA processes: TLS/WSS preparation, directory/invites/restart and multi-local credentials.
 Public XNA BeginFind/EndFind plus private create/join control evidence; no public online
 create/join or Internet realtime assertion.
 """
@@ -92,7 +92,7 @@ def main():
                 output,_=host.communicate(timeout=45);assert host.returncode==0 and "directory-done" in output,"CNA host/leaderboard probe"
                 print(kind,output.strip())
                 stop(server);server=None
-            print("Two primary CNA processes/four accounts plus an isolated-title search peer passed: standard BeginFind/EndFind, update-thread callback/metadata/End-once, both directory kinds, two title IDs, verified TLS, server restart, filtering, ordinary/private invited control join/leave/replay, auxiliary verified-TLS Ranked playing find/join/invited-join rejection and preserved consent, expired owner+secondary credentials and leaderboard multi-local refresh. Public online create/join/lifecycle and realtime relay integration remain unfinished.")
+            print("Two primary CNA processes/four accounts plus an isolated-title search peer passed: standard BeginFind/EndFind, update-thread callback/metadata/End-once, both directory kinds, two title IDs, verified TLS/WSS, owned create/ordinary/invited preparation, failed/abandoned rollback, server restart, filtering, ordinary/private invited control join/leave/replay, auxiliary verified-TLS Ranked playing find/join/invited-join rejection and preserved consent, expired owner+secondary credentials and leaderboard multi-local refresh. Public online create/join/lifecycle and realtime relay integration remain unfinished.")
         finally:
             for process in children:
                 if process.poll() is None:process.kill();process.wait()
