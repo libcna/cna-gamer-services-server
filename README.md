@@ -265,3 +265,11 @@ on the 90-second membership lease; client destruction can wait for bounded I/O. 
 test does not establish ENet welcome completion or public NetworkSession Create/Join behavior;
 those remain the next integration step. The separate relay tests continue to provide actual
 ENet payload and isolated-NAT evidence.
+
+GS-008c3a also exercises the client's bounded directory/lease pump: authenticated full snapshots
+are returned at the caller update boundary, with one pending request per session. Native probes
+force lease renewal after a real server restart and again after admin-expired local credentials;
+fake-clock unit tests cover one-second polling and thirty-second independent renewal scheduling,
+owner publication, cancellation, stable failure/explicit same-origin retry and queue saturation.
+This is control-state pumping only. Conversion into XNA gamer/lifecycle events, relay status,
+ENet welcome completion and public online Create/Join remain unfinished.
