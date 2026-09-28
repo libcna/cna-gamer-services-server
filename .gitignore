@@ -1,0 +1,4 @@
+/build*/
+*.sqlite3*
+*.pem
+__pycache__/
