@@ -93,3 +93,9 @@ add_test(NAME service_cna_owned_enet COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRE
 set_tests_properties(service_cna_owned_enet PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 add_test(NAME service_cna_owned_enet_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_relay_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --owned --isolated)
 set_tests_properties(service_cna_owned_enet_nat PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+# GS-007e2c3b: public XNA NetworkSession Create/Find/Join/data/state/leave, only standard CNA API.
+add_test(NAME service_cna_session COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(service_cna_session PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+add_test(NAME service_cna_session_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --isolated)
+set_tests_properties(service_cna_session_nat PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)

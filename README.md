@@ -314,3 +314,27 @@ welcome, and End-style consumption transfers initial roster/data observations wi
 Raw probes are unchanged. Matching raw-native/raw-NAT/owned-native/owned-NAT cases **4/4 pass,
 41.94s** (9.82s, 10.58s, 10.43s, 11.09s), with no skip. Public XNA adapter remains unfinished;
 no server protocol, business logic or migration changed in this acceptance update.
+
+GS-007e2c3b public NetworkSession acceptance (2026-09-28): `service_cna_session` and
+`service_cna_session_nat` drive CNA's `cna_service_session_client_harness`, which uses only the
+standard XNA GamerServices/Net API (Guide sign-in keystrokes are the only simulated input). Per
+category/title: the host `BeginCreate`s a PlayerMatch or Ranked session for two Guide-signed-in
+accounts (pending result, one owner-thread callback, `EndCreate`); the joiner's property-filtered
+`Find` excludes a mismatch, returns the listing with exact slot counts, and `BeginJoin`/`EndJoin`
+produce the complete roster with the remote host. Both processes observe `GamerJoined` for all four
+gamers, shared per-machine views, distinct IDs, six sender-verified packets each way (reliable,
+32KiB `PacketWriter` and in-order), host property/join-in-progress and `StartGame`/`EndGame` on the
+remote machine; PlayerMatch client leave raises `GamerLeft` for its group, Ranked host leave raises
+`SessionEnded(HostEndedSession)` and Ranked refuses join-in-progress. NAT mode repeats it from two
+separate outbound-only rootless namespaces. Configure `CNA_SERVICE_SESSION_CLIENT_HARNESS` (plus the
+NAT helper variables above); a missing probe or helper is an explicit skip, never a pass.
+
+```sh
+CNA_SERVICE_SESSION_CLIENT_HARNESS=/absolute/CNA/build/cna_service_session_client_harness \
+ctest --test-dir build -R '^service_cna_session(_nat)?$' --output-on-failure
+```
+
+Full matching corpus with all five CNA probes and the NAT helper: **15/15 pass, zero skips,
+176.78s** (public session 8.12s, public session NAT 8.53s). No server code, schema or protocol
+change was needed; the client adapter lives in CNA. Invited joins/Guide, Ranked arbitration,
+reconnect and public Internet deployment qualification remain open.
