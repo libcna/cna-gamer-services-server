@@ -87,3 +87,9 @@ set_tests_properties(service_cna_relay PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 7
 
 add_test(NAME service_cna_relay_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_relay_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --isolated)
 set_tests_properties(service_cna_relay_nat PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+# GS-008c3c2: owned preparation/membership/game session engines, separate from raw hostile-packet probes.
+add_test(NAME service_cna_owned_enet COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_relay_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --owned)
+set_tests_properties(service_cna_owned_enet PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+add_test(NAME service_cna_owned_enet_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_relay_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --owned --isolated)
+set_tests_properties(service_cna_owned_enet_nat PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

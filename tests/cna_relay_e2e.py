@@ -4,8 +4,10 @@ import os, pathlib, selectors, shutil, subprocess, sys, tempfile, time
 
 
 def main():
-    assert len(sys.argv) in (2,3) and (len(sys.argv)==2 or sys.argv[2]=="--isolated"),"test arguments"
-    isolated=len(sys.argv)==3
+    flags=sys.argv[2:]
+    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--owned"},"test arguments"
+    isolated="--isolated" in flags
+    owned="--owned" in flags
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
@@ -59,6 +61,7 @@ def main():
         def spawn(role,kind,game,url,trust=cert):
             env=os.environ.copy();env.pop("DISPLAY",None);env["WAYLAND_DISPLAY"]=""
             env.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID=game,CNA_GAMER_SERVICES_CA_BUNDLE=str(trust),CNA_GAMER_SERVICES_CREDENTIALS_DIR="0",CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+            env["CNA_SERVICE_RELAY_OWNED"]="1" if owned else "0"
             arguments=[client,role,kind]
             if isolated:
                 env["CNA_GAMER_SERVICES_ENDPOINT"]=url.replace("localhost","10.0.2.2")
@@ -104,7 +107,10 @@ def main():
                 send(host,remote+"\n");read(host,"relay-ready");read(join,"relay-ready")
                 send(host,"continue\n");send(join,"continue\n")
                 read(host,"relay-exchanged");read(join,"relay-exchanged")
-                print(kind,"two CNA processes/four local accounts exchanged four verified ENet application packets each way, including 32KiB fragmentation and unreliable channel; forged existing sender and unknown target refused before delivery")
+                if owned:
+                    print(kind,"two owned CNA session engines/four local accounts: pending preparation, exact verified welcome before client readiness, complete remote group join, four source-checked ENet packets each way across both local slots, 32KiB fragmentation/unreliable delivery, forbidden local sends refused")
+                else:
+                    print(kind,"two CNA processes/four local accounts exchanged four verified ENet application packets each way, including 32KiB fragmentation and unreliable channel; forged existing sender and unknown target refused before delivery")
                 if kind=="player":
                     subprocess.run([admin,str(db),"revoke-user","dana"],check=True,stdout=subprocess.DEVNULL)
                     send(join,"continue\n");done(join)
@@ -112,9 +118,11 @@ def main():
                     stop(server);server=None;send(host,"continue\n");done(host)
                 else:
                     stop(server);server=None;send(host,"continue\n");send(join,"continue\n");done(host);done(join)
+            if owned:
+                print("Verified private owned preparation/session engine: TLS/WSS authority, exact ENet establishment, both local account slots, group departure on secondary revocation, single safe failure, owner-bound observations and lease cleanup. Public NetworkSession adapter, reconnect and public Internet deployment remain unfinished.")
             if isolated:
                 assert len(namespace_ids)==4,"two separate NAT clients per category"
-                print("Verified NAT-isolated CNA libcurl WSS/ENet relay: separate rootless namespaces/NAT helpers, identical private addresses, no inbound mappings, two categories/titles, four identities, fragmented/unreliable game data, local UDP guards, revocation and server failure. Public online NetworkSession, reconnect and public Internet deployment remain unfinished.")
+                print("Verified NAT-isolated CNA libcurl WSS/ENet relay: separate rootless namespaces/NAT helpers, identical private addresses, no inbound mappings, two categories/titles, four identities, fragmented/unreliable game data, revocation and server failure. Raw mode separately tests UDP/malformed-packet guards. Public online NetworkSession, reconnect and public Internet deployment remain unfinished.")
             else:
                 print("Verified CNA libcurl WSS/ENet relay: CA/hostname refusals, two categories/titles, four identities, source-preserving game data, multi-local revocation, owner channel isolation and server failure. Localhost only; public online NetworkSession/Internet isolation/reconnect unfinished.")
         finally:

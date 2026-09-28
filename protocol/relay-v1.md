@@ -153,3 +153,17 @@ unknown/partial leave or end claims cannot replace authority reconciliation. The
 on the server or provide malicious-host anti-cheat. Native tests now refuse a forged existing
 sender ID and unknown target while preserving actual fragmented/unreliable ENet exchange in
 both localhost and separate outbound-NAT namespaces. Public XNA lifecycle remains unfinished.
+
+## Owned native session engine (GS-008c3c2)
+
+CNA consumes directory membership and secure relay resources into one owner-thread session.
+Host readiness means prepared transport; client readiness additionally requires the exact
+service-bound ENet welcome. Directory membership is reconciled before packet admission, while
+connected complete groups remain a separate condition. Revisions trigger bounded welcome
+recovery; removed authority, transport closure or a ten-second handshake timeout is observed
+as one safe failure. Game data retains the existing ENet packet format and the server remains
+an opaque datagram forwarder. CNA bounds pending observations and unacknowledged outgoing data
+by 128 messages/4MiB, with a separate 64-message/256KiB control budget and a 64-ENet-event pump
+budget. These local implementation limits do not change CNR v1 envelope/golden bytes. New native
+and NAT acceptance cases exercise the owned engine, separately from hostile raw packet probes.
+Public XNA lifecycle and reconnect remain incomplete.

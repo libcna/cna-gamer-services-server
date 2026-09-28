@@ -282,3 +282,27 @@ while all four legitimate fragmented/unreliable packets still arrive each way. C
 complete groups and directory-owned state/properties are validated before game-object mutation.
 Native and separate rootless-NAT relay cases pass. This is a client admission boundary, not new
 server game parsing, public NetworkSession lifecycle completeness or malicious-host anti-cheat.
+
+GS-008c3c2 adds two owned CNA session-engine acceptance cases, preserving the separate raw
+hostile-packet probes. Configure `CNA_SERVICE_RELAY_CLIENT_HARNESS` and optional NAT helper
+variables as above, then run:
+
+```sh
+ctest --test-dir build -R '^service_cna_owned_enet(_nat)?$' --output-on-failure
+```
+
+The real CNA owner now consumes prepared membership/transport, completes client readiness only
+with the exact service-authorized ENet welcome, publishes full connected-group observations,
+checks both local player slots and relays game data between admitted groups. Tests cover both
+categories/titles/four identities, 32KiB fragmented and unreliable data, secondary-account
+revocation, complete group departure, server failure and owned cleanup. NAT mode uses separate
+outbound-only namespaces with identical private addresses and no published inbound ports.
+Required missing harness/helpers return an explicit skip, never a pass. The raw cases retain
+malicious incoming fragment, source/size and forged ID checks. These are private-engine tests;
+public XNA Create/Join/events, reconnect and real Internet deployment qualification remain open.
+No protocol/schema changes, server decoding of game objects or Xbox LIVE compatibility.
+
+Final matching GS-008c3c2 corpus: **13/13 CTest pass, zero skips, 206.58s**. Includes native C++/C
+HTTPS persistence, directory/invites, raw WSS/native/NAT probes and the new owned engine cases
+(9.96s native / 11.59s NAT). Exact revisions are recorded in CNA's living plan. The server
+implementation and schema remain unchanged; this commit registers and documents acceptance.
