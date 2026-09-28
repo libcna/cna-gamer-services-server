@@ -5,8 +5,9 @@ import os, pathlib, selectors, shutil, subprocess, sys, tempfile, time
 
 def main():
     flags=sys.argv[2:]
-    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated"},"test arguments"
+    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite"},"test arguments"
     isolated="--isolated" in flags
+    invite="--invite" in flags
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
@@ -64,7 +65,7 @@ def main():
             env=os.environ.copy();env.pop("DISPLAY",None);env["WAYLAND_DISPLAY"]=""
             env.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID=game,CNA_GAMER_SERVICES_CA_BUNDLE=str(cert),
                 CNA_GAMER_SERVICES_CREDENTIALS_DIR="0",CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
-            arguments=[client,role,kind]
+            arguments=[client,role,kind]+(["invite"] if invite else [])
             if isolated:
                 env["CNA_GAMER_SERVICES_ENDPOINT"]=url.replace("localhost","10.0.2.2")
                 arguments=["unshare","--user","--map-root-user","--net",sys.executable,
@@ -104,6 +105,7 @@ def main():
             for kind,game in (("player","one"),("ranked","two")):
                 server,url=start()
                 host=spawn("host",kind,game,url);send(host,"alice-password\ncharlie-password\n");read(host,"session-created")
+                if invite:read(host,"invite-sent")
                 join=spawn("join",kind,game,url);send(join,"bob-password\ndana-password\n");read(join,"session-joined")
                 both("session-roster");proceed(host,join)
                 exchanged=both("session-exchanged ");assert exchanged==("session-exchanged 6","session-exchanged 6"),"six verified deliveries each way"
@@ -114,7 +116,8 @@ def main():
                     proceed(host);print(done(host));proceed(join);print(done(join))
                 stop(server);server=None
                 print(kind,"public XNA NetworkSession: two CNA processes/four Guide-signed-in accounts, pending Begin/End with one owner-thread callback,",
-                    "property-filtered Find, complete GamerJoined replay, shared machines, six verified packets each way incl. 32KiB and in-order,",
+                    "Guide.ShowGameInvite -> Guide acceptance -> InviteAccepted -> synchronous JoinInvited," if invite else "property-filtered Find,",
+                    "complete GamerJoined replay, shared machines, six verified packets each way incl. 32KiB and in-order,",
                     "host properties/join-in-progress and StartGame/EndGame observed remotely,",
                     "client leave -> GamerLeft" if kind=="player" else "host leave -> SessionEnded(HostEndedSession)")
             if isolated:

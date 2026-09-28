@@ -338,3 +338,13 @@ Full matching corpus with all five CNA probes and the NAT helper: **15/15 pass, 
 176.78s** (public session 8.12s, public session NAT 8.53s). No server code, schema or protocol
 change was needed; the client adapter lives in CNA. Invited joins/Guide, Ranked arbitration,
 reconnect and public Internet deployment qualification remain open.
+
+GS-007e3 invitations (2026-09-28): `service_cna_invite` and `service_cna_invite_nat` run the same
+public harness with `invite`: the host calls `Guide.ShowGameInvite(PlayerIndex.One, {})`, types the
+recipient gamertag into the Guide prompt and confirms; the recipient process polls its inbox,
+shows the Guide invitation prompt, accepts, receives `NetworkSession.InviteAccepted` for the
+invitee (IsCurrentSession=false) and calls synchronous `NetworkSession.JoinInvited(2)` inside that
+handler, exactly as the original Invites sample does; the rest of the lifecycle is then verified as
+above for both categories/titles. Only keystrokes and message-box clicks are simulated. Full corpus
+with all probes and the NAT helper: **17/17 pass, zero skips, 217.97s** (invite 18.51s, invite NAT
+20.39s; the recipient's first 5 s inbox poll dominates). No server code or schema change.
