@@ -20,7 +20,7 @@ def worker():
     assert login["error"] == "OK"
     token = login["result"]["token"]
     entries = request(url, ca, "one", "achievements.list", token=token)["result"]["achievements"]
-    assert entries[0]["earnedTicks"] == 0
+    assert entries[0]["earnedTicks"] == 0 or action == "award"
     if action == "award":
         assert request(url, ca, "one", "achievements.award", {"key": "first"}, token)["error"] == "OK"
     pathlib.Path(state).write_text(json.dumps({"token": token}))
@@ -29,6 +29,9 @@ def worker():
 
 def main():
     build = pathlib.Path(sys.argv[1]).resolve()
+    client = os.environ.get("CNA_SERVICE_CLIENT_HARNESS")
+    if client:
+        assert pathlib.Path(client).is_file(), "missing CNA client harness"
     with tempfile.TemporaryDirectory(prefix="service-e2e-", dir=build) as temp:
         root = pathlib.Path(temp); os.chmod(root, 0o700)
         ca, key, db = root/"test-cert.pem", root/"test-key.pem", root/"service.sqlite3"
@@ -41,6 +44,15 @@ def main():
         for user in ("alice", "bob"):
             subprocess.run([admin, str(db), "user", user, user.title()], input=user+"-password\n", text=True, check=True, stdout=subprocess.DEVNULL)
         server = None
+        def run_cna(url, username, state, action, game="one", password=None, trust=None):
+            environment = os.environ.copy()
+            environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID=game,
+                               CNA_GAMER_SERVICES_CA_BUNDLE=str(ca) if trust is None else trust,
+                               CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+            environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
+            subprocess.run([client, "--real", username, state, action],
+                           input=(password or username+"-password")+"\n", text=True,
+                           env=environment, check=True, timeout=45)
         def start():
             process = subprocess.Popen([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "127.0.0.1", "--port", "0", "--cert", str(ca), "--key", str(key)], stdout=subprocess.PIPE, text=True)
             line = process.stdout.readline(); assert "listening" in line
@@ -55,11 +67,22 @@ def main():
                 try: request(endpoint, trust, "one", "hello")
                 except (urllib.error.URLError, ssl.SSLError): rejected = True
                 assert rejected, "TLS trust/hostname must fail closed"
+            if client:
+                run_cna(url, "alice", "none", "reject", password="wrong-password")
+                run_cna(url, "alice", "none", "reject", trust="")
+                run_cna(url.replace("localhost", "127.0.0.1"), "alice", "none", "reject")
+                run_cna(url, "alice", "none", "award")
+                run_cna(url, "bob", "none", "read")
+                run_cna(url, "alice", "none", "read", game="two")
+                run_cna(url, "alice", "earned", "read")
             for user, action in (("alice", "award"), ("bob", "read")):
                 subprocess.run([sys.executable, __file__, "--worker", url, str(ca), user, str(root/(user+".json")), action], input=user+"-password\n", text=True, check=True)
             token = json.loads((root/"alice.json").read_text())["token"]
             assert request(url, str(ca), "two", "achievements.list", token=token)["error"] == "UNAUTHENTICATED"
             stop(server); server, url = start()
+            if client:
+                run_cna(url, "alice", "earned", "read")
+                run_cna(url, "bob", "none", "read")
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
             assert request(url, str(ca), "one", "auth.logout", token=token)["error"] == "OK"
@@ -68,6 +91,7 @@ def main():
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
+        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out")
         print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, revocation, insecure public bind refusal")
 
 
