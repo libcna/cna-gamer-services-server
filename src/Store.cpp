@@ -8,6 +8,7 @@
 #include "SessionDirectoryMigration.hpp"
 #include "InvitationMigration.hpp"
 #include "RelayTicketMigration.hpp"
+#include "RankedLobbyMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -87,7 +88,7 @@ Store::Store(const std::string& path) {
         Statement version(db_,"PRAGMA user_version");
         (void)version.row();
         const auto current=version.number(0);
-        if (current>8) throw Error("UNSUPPORTED_DATABASE_VERSION");
+        if (current>9) throw Error("UNSUPPORTED_DATABASE_VERSION");
         if (current==0) {
             exec("BEGIN IMMEDIATE");
             exec(InitialMigration);
@@ -100,6 +101,7 @@ Store::Store(const std::string& path) {
         if(current<6){exec("BEGIN IMMEDIATE");exec(SessionDirectoryMigration);exec("COMMIT");}
         if(current<7){exec("BEGIN IMMEDIATE");exec(InvitationMigration);exec("COMMIT");}
         if(current<8){exec("BEGIN IMMEDIATE");exec(RelayTicketMigration);exec("COMMIT");}
+        if(current<9){exec("BEGIN IMMEDIATE");exec(RankedLobbyMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

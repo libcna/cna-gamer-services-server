@@ -85,10 +85,37 @@ int main() {
         check(call(service,"sessions.leave",{{"session",session}},tokens[0])["result"]["ended"]==true,"host leave closes session");
         check(call(service,"sessions.get",{{"session",session}},tokens[1])["error"]=="NOT_FOUND","host close releases every local member");
         create["kind"]="ranked";create["maxGamers"]=4;create["privateSlots"]=0;create["participants"]=Json::array({tokens[0]});
+        auto invalidRanked=create;invalidRanked["allowJoinInProgress"]=true;
+        check(call(service,"sessions.create",invalidRanked,tokens[0])["error"]=="INVALID_ARGUMENT","ranked join-in-progress create refused");
         auto ranked=call(service,"sessions.create",create,tokens[0]);check(ranked["error"]=="OK"&&ranked["result"]["kind"]=="ranked","ranked directory create");
         find["kind"]="ranked";check(call(service,"sessions.find",find,tokens[4])["result"]["sessions"].size()==1,"ranked directory discovery");
         const auto rankedId=ranked["result"]["session"].get<std::string>();
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[4]})}},tokens[4])["error"]=="OK","ranked directory join");
+        auto rankSnapshot=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];
+        Json rankUpdate{{"session",rankedId},{"revision",rankSnapshot["revision"]},{"maxGamers",4},{"privateSlots",0},
+            {"properties",properties},{"allowJoinInProgress",true},{"state","lobby"}};
+        check(call(service,"sessions.update",rankUpdate,tokens[0])["error"]=="INVALID_ARGUMENT","ranked join-in-progress update refused");
+        check(call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"]==rankSnapshot,"refused ranked update is atomic");
+        auto rankInvite=call(service,"invites.send",{{"session",rankedId},{"gamertag","bob"}},tokens[0])["result"];
+        const auto rankInviteId=rankInvite["invite"].get<std::string>();
+        check(call(service,"invites.accept",{{"invite",rankInviteId}},tokens[1])["error"]=="OK","ranked lobby invitation accepted");
+        rankUpdate["allowJoinInProgress"]=false;rankUpdate["state"]="playing";
+        check(call(service,"sessions.update",rankUpdate,tokens[0])["error"]=="OK","ranked lobby transitions to gameplay");
+        check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"playing ranked sessions hidden");
+        check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","ranked ordinary gameplay join refused");
+        check(call(service,"sessions.joinInvited",{{"session",rankedId},{"invite",rankInviteId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","ranked invited gameplay join refused");
+        check(call(service,"invites.get",{{"invite",rankInviteId}},tokens[1])["result"]["status"]=="accepted","refused ranked join does not consume invitation");
+        check(call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"]["currentGamers"]==2,"refused ranked joins do not add members");
+        check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[4]})}},tokens[4])["error"]=="OK","existing ranked membership replay remains idempotent");
+        const auto priorRevision=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"]["revision"].get<long long>();
+        {Store admin(path.string());admin.exec("UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
+        check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"legacy ranked flag cannot expose gameplay");
+        check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","legacy ranked flag cannot allow gameplay join");
+        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==9,"ranked policy schema upgrade");}
+        auto migrated=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];
+        check(migrated["allowJoinInProgress"]==false&&migrated["revision"]==priorRevision+1,"migration repairs flag and revision");
+        check(migrated["currentGamers"]==2,"migration preserves authenticated membership");
+        {Service restarted(path.string());check(call(restarted,"sessions.get",{{"session",rankedId}},tokens[4])["result"]["allowJoinInProgress"]==false,"ranked policy persists across restart");}
         {Store admin(path.string());admin.exec("UPDATE directory_sessions SET expires=0");}
         check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"host expiry removes stale directory");
         create["kind"]="player";create["maxGamers"]=2;create["privateSlots"]=1;

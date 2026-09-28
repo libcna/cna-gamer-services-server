@@ -246,3 +246,10 @@ expired secondary credentials; other titles see no advertisement. The same test'
 invites and heartbeat still use private control operations. This does not claim completed public
 NetworkSession lifecycle or avatar acceptance. Run with `CNA_SERVICE_DIRECTORY_CLIENT_HARNESS`
 pointing to the matching CNA `cna_service_directory_client_harness` executable.
+
+GS-007f1 schema 9 enforces lobby-only Ranked admission: enable-join-in-progress create/update
+requests are refused atomically; gameplay hides Ranked listings and refuses new ordinary or
+invited groups. Accepted invitations remain unconsumed on refusal. Existing identical group
+replay supports control idempotence without adding members. Migration repairs old true flags
+and advances revision while preserving participants. Back up databases before upgrading;
+normal server/admin open applies the migration transactionally. No control/CNR version change.

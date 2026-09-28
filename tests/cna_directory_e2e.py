@@ -4,6 +4,7 @@ Public XNA BeginFind/EndFind plus private create/join control evidence; no publi
 create/join or Internet realtime assertion.
 """
 import os, pathlib, selectors, subprocess, sys, tempfile, urllib.parse
+from transport_e2e import request
 
 
 def main():
@@ -51,6 +52,24 @@ def main():
                 host=spawn("host",kind,game,url,("alice","charlie"))
                 expire("alice","charlie")
                 host.stdin.write("continue\n");host.stdin.flush()
+                if kind=="ranked":
+                    _,session,invite=read(host,"directory-playing ").split()
+                    credentials=request(url,str(cert),game,"auth.login",{"username":"bob","password":"bob-password"})
+                    assert credentials["error"]=="OK", "Ranked negative probe login"
+                    token=credentials["result"]["token"]
+                    def rpc(op,args):return request(url,str(cert),game,op,args,token)
+                    found=rpc("sessions.find",{"kind":"ranked","localCount":1,"start":0,"limit":32,"properties":[None]*8})
+                    assert found["error"]=="OK" and not found["result"]["sessions"], "playing Ranked advertisement"
+                    args={"session":session,"participants":[token]}
+                    assert rpc("sessions.join",args)["error"]=="INVALID_STATE", "playing Ranked ordinary admission"
+                    assert rpc("invites.accept",{"invite":invite})["error"]=="OK", "Ranked invitation consent"
+                    args["invite"]=invite
+                    assert rpc("sessions.joinInvited",args)["error"]=="INVALID_STATE", "playing Ranked invited admission"
+                    preserved=rpc("invites.get",{"invite":invite})
+                    assert preserved["error"]=="OK" and preserved["result"]["status"]=="accepted", "rejected admission consumed consent"
+                    assert rpc("invites.dismiss",{"invite":invite})["error"]=="OK", "negative probe cleanup"
+                    assert rpc("auth.logout",{})["error"]=="OK", "negative probe logout"
+                    host.stdin.write("continue\n");host.stdin.flush()
                 _,session,invite=read(host,"directory-host ").split()
                 # Same endpoint, new real server process, persisted invitation/membership.
                 port=urllib.parse.urlsplit(url).port;stop(server);server=None;server,url=start(port)
@@ -73,7 +92,7 @@ def main():
                 output,_=host.communicate(timeout=45);assert host.returncode==0 and "directory-done" in output,"CNA host/leaderboard probe"
                 print(kind,output.strip())
                 stop(server);server=None
-            print("Two primary CNA processes/four accounts plus an isolated-title search peer passed: standard BeginFind/EndFind, update-thread callback/metadata/End-once, both directory kinds, two title IDs, verified TLS, server restart, filtering, ordinary/private invited control join/leave/replay, expired owner+secondary credentials and leaderboard multi-local refresh. Public online create/join/lifecycle and realtime relay integration remain unfinished.")
+            print("Two primary CNA processes/four accounts plus an isolated-title search peer passed: standard BeginFind/EndFind, update-thread callback/metadata/End-once, both directory kinds, two title IDs, verified TLS, server restart, filtering, ordinary/private invited control join/leave/replay, auxiliary verified-TLS Ranked playing find/join/invited-join rejection and preserved consent, expired owner+secondary credentials and leaderboard multi-local refresh. Public online create/join/lifecycle and realtime relay integration remain unfinished.")
         finally:
             for process in children:
                 if process.poll() is None:process.kill();process.wait()

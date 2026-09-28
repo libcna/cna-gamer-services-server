@@ -87,6 +87,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         if(!args.contains("properties"))throw Error("INVALID_ARGUMENT");
         validateSessionProperties(args["properties"]);
         const bool allowJoin=booleanField(args,"allowJoinInProgress");
+        if(kind=="ranked"&&allowJoin)throw Error("INVALID_ARGUMENT");
         const auto id=randomHex(16),machine=randomHex(16);Transaction transaction(store_);
         Statement cap(store_.db(),"SELECT COUNT(*),SUM(CASE WHEN host_id=? THEN 1 ELSE 0 END) FROM directory_sessions WHERE game_id=?");cap.bind(1,user);cap.bind(2,game);(void)cap.row();
         if(cap.number(0)>=1024||cap.number(1)>=16)throw Error("LIMIT_EXCEEDED");
@@ -107,14 +108,14 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         const auto kind=kindField(args);const auto locals=integerField(args,"localCount",1,4),start=integerField(args,"start",0,1024),limit=integerField(args,"limit",1,32);
         if(!args.contains("properties"))throw Error("INVALID_ARGUMENT");
         validateSessionProperties(args["properties"]);
-        Statement search(store_.db(),"SELECT d.id FROM directory_sessions d WHERE d.game_id=? AND d.kind=? AND (d.state='lobby' OR d.allow_join=1) AND d.max_gamers-d.private_slots-(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=0)>=? AND NOT EXISTS(SELECT 1 FROM directory_members m WHERE m.session_id=d.id AND m.user_id=?) AND NOT EXISTS(SELECT 1 FROM json_each(?) p WHERE p.value IS NOT NULL AND (json_extract(d.properties,'$['||p.key||']') IS NULL OR json_extract(d.properties,'$['||p.key||']')!=p.value)) ORDER BY d.created,d.id LIMIT ? OFFSET ?");
+        Statement search(store_.db(),"SELECT d.id FROM directory_sessions d WHERE d.game_id=? AND d.kind=? AND (d.state='lobby' OR (d.kind='player' AND d.allow_join=1)) AND d.max_gamers-d.private_slots-(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=0)>=? AND NOT EXISTS(SELECT 1 FROM directory_members m WHERE m.session_id=d.id AND m.user_id=?) AND NOT EXISTS(SELECT 1 FROM json_each(?) p WHERE p.value IS NOT NULL AND (json_extract(d.properties,'$['||p.key||']') IS NULL OR json_extract(d.properties,'$['||p.key||']')!=p.value)) ORDER BY d.created,d.id LIMIT ? OFFSET ?");
         search.bind(1,game);search.bind(2,kind);search.bind(3,locals);search.bind(4,user);search.bind(5,args["properties"].dump());search.bind(6,limit+1);search.bind(7,start);
         Json rows=Json::array();while(search.row())rows.push_back(directorySnapshot(search.text(0),false));
         const bool more=rows.size()>static_cast<std::size_t>(limit);if(more)rows.erase(rows.end()-1);
         return Json{{"sessions",rows},{"start",start},{"more",more}};
     }
     const auto id=sessionId(args);Transaction transaction(store_);
-    Statement session(store_.db(),"SELECT host_id,host_machine,state,allow_join,revision,max_gamers,private_slots FROM directory_sessions WHERE id=? AND game_id=?");session.bind(1,id);session.bind(2,game);
+    Statement session(store_.db(),"SELECT host_id,host_machine,state,allow_join,revision,max_gamers,private_slots,kind FROM directory_sessions WHERE id=? AND game_id=?");session.bind(1,id);session.bind(2,game);
     if(!session.row())throw Error("NOT_FOUND");
     if(op=="sessions.join"||op=="sessions.joinInvited") {
         const bool invited=op=="sessions.joinInvited";
@@ -144,7 +145,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             auto result=directorySnapshot(id,true);result["machine"]=existing.text(0);transaction.commit();return result;
         }
         if(invited&&inviteStatus=="used")throw Error("INVALID_STATE");
-        if(session.text(2)=="playing"&&!session.number(3))throw Error("INVALID_STATE");
+        if(session.text(2)=="playing"&&(session.text(7)=="ranked"||!session.number(3)))throw Error("INVALID_STATE");
         const auto snapshot=directorySnapshot(id,true);
         auto privateAvailable=invited?snapshot["openPrivateSlots"].get<std::size_t>():0;
         if(members.size()>snapshot["openPublicSlots"].get<std::size_t>()+privateAvailable)throw Error("SESSION_FULL");
@@ -189,6 +190,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         const auto maximum=integerField(args,"maxGamers",2,MaxSessionGamers),privateSlots=integerField(args,"privateSlots",0,maximum);
         const auto state=stringField(args,"state",16);if(state!="lobby"&&state!="playing")throw Error("INVALID_STATE");
         const bool allowJoin=booleanField(args,"allowJoinInProgress");
+        if(session.text(7)=="ranked"&&allowJoin)throw Error("INVALID_ARGUMENT");
         if(!args.contains("properties"))throw Error("INVALID_ARGUMENT");
         validateSessionProperties(args["properties"]);
         const auto current=directorySnapshot(id,false);
