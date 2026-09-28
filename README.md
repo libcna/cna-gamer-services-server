@@ -5,8 +5,9 @@ mutual friend requests and presence, achievements, immutable pictures/assets and
 reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
 The control-only PlayerMatch/Ranked session directory now supports authenticated multi-local
 membership, sparse property filtering, host revisions/leases and restart. CNA public online sessions,
-CNA ENet relay integration, platform keychains, push events and
-avatar distribution remain unfinished. The separate server WSS endpoint now forwards authenticated
+public online lifecycle integration, platform keychains, push events and
+avatar distribution remain unfinished. Private CNA ENet relay transport is now tested with real
+separate processes; NAT-isolated acceptance is the next task. The separate server WSS endpoint now forwards authenticated
 bounded datagrams; that alone does not prove Internet multiplayer. Do not call this complete or production-hardened.
 
 Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Original service code is MIT. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
@@ -178,3 +179,27 @@ probe 6.47s (32 join/17 host checks per category); WSS 259 checks/47.36s. No CNA
 Internet multiplayer proof in this checkpoint. Logs: `build/relay-wss-build.log` and
 `build/relay-wss-final-matching.log`. The exact-limit empty continuation buffer fix and the
 slow-consumer fixture deadline correction are retained by meaningful wire tests.
+
+GS-008c2 native CNA relay checkpoint (2026-09-28): the private CNA libcurl WSS/loopback UDP bridge
+passes verified trust/hostname refusal, exact authorized machine routing, stable UDP routes,
+wrong-source/oversize local datagram guards, multi-local secondary revocation and server failure.
+Two real CNA processes/four accounts exchange four application messages in each direction through
+actual ENet for both service categories/title IDs, including 32KiB reliable fragmentation and an
+unreliable channel. This probe uses private directory/transport infrastructure and is not yet a
+standard public NetworkSession acceptance sample or evidence of Internet/NAT connectivity.
+
+```sh
+CNA_SERVICE_CLIENT_HARNESS=/absolute/CNA/build/cna_service_client_harness \
+CNA_SERVICE_C_API_HARNESS=/absolute/CNA/build/cna_c_api_service_client \
+CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=/absolute/CNA/build/cna_service_directory_client_harness \
+CNA_SERVICE_RELAY_CLIENT_HARNESS=/absolute/CNA/build/cna_service_relay_client_harness \
+ctest --test-dir build --output-on-failure
+```
+
+The matching four-probe full gate passes **10/10**, no skip, **133.34s**; new `service_cna_relay`
+passes in **8.26s**, standalone adversarial WSS in **48.10s**. New native test explicitly skips
+(return 77) without its configured probe, so an unconfigured run is not equivalent evidence.
+The fixture owns temporary TLS/SQLite state and closes/kills its child processes on error.
+No server business logic, schema/protocol version, accounts compatibility or license changes in
+this integration slice. Reconnect, isolated relay-only routing, public online sessions/invites,
+Ranked arbitration and standard avatar migration remain active tasks.
