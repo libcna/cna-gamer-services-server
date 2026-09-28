@@ -198,6 +198,21 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             maximum-privateSlots<current["maxGamers"].get<long long>()-current["privateSlots"].get<long long>()-current["openPublicSlots"].get<long long>())throw Error("INVALID_ARGUMENT");
         Statement update(store_.db(),"UPDATE directory_sessions SET max_gamers=?,private_slots=?,properties=?,state=?,allow_join=?,revision=revision+1,expires=? WHERE id=?");
         update.bind(1,maximum);update.bind(2,privateSlots);update.bind(3,args["properties"].dump());update.bind(4,state);update.bind(5,allowJoin?1LL:0LL);update.bind(6,now()+90);update.bind(7,id);(void)update.row();
+        if(session.text(7)=="ranked"&&session.text(2)!=state) {
+            // Lobby->Playing opens an arbitration round over the exact current membership;
+            // Playing->Lobby closes it so late or missing reports can be resolved.
+            if(state=="playing") {
+                Json members=Json::array();std::set<std::string> machines;
+                Statement roster(store_.db(),"SELECT user_id,machine_id FROM directory_members WHERE session_id=? ORDER BY ordinal");roster.bind(1,id);
+                while(roster.row()){members.push_back(Json{{"userId",roster.text(0)},{"machine",roster.text(1)}});machines.insert(roster.text(1));}
+                Statement round(store_.db(),"INSERT INTO arbitration_rounds(id,game_id,session_id,start_revision,members,machines,created,updated) VALUES(?,?,?,?,?,?,?,?)");
+                round.bind(1,randomHex(16));round.bind(2,game);round.bind(3,id);round.bind(4,revision+1);round.bind(5,members.dump());
+                round.bind(6,Json(std::vector<std::string>(machines.begin(),machines.end())).dump());round.bind(7,now());round.bind(8,now());(void)round.row();
+            }else {
+                Statement close(store_.db(),"UPDATE arbitration_rounds SET end_revision=?,updated=? WHERE session_id=? AND end_revision IS NULL");
+                close.bind(1,revision+1);close.bind(2,now());close.bind(3,id);(void)close.row();
+            }
+        }
         Statement heartbeat(store_.db(),"UPDATE directory_machines SET expires=? WHERE id=?");heartbeat.bind(1,now()+90);heartbeat.bind(2,machine);(void)heartbeat.row();
         auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
     }

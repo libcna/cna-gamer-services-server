@@ -34,8 +34,10 @@ def main():
         for game in ("one","two"):
             subprocess.run([admin,str(db),"title",game,game],check=True,stdout=subprocess.DEVNULL)
         board='{"key":"BestScoreLifeTime","mode":0,"ascending":false,"aggregation":"best","arbitrated":false,"columns":{"Rounds":"int32"}}'
+        kills='{"key":"Kills","mode":0,"ascending":false,"aggregation":"latest","arbitrated":true,"columns":{}}'
         for game in ("one","two"):
             subprocess.run([admin,str(db),"leaderboard",game],input=board,text=True,check=True,stdout=subprocess.DEVNULL)
+            subprocess.run([admin,str(db),"leaderboard",game],input=kills,text=True,check=True,stdout=subprocess.DEVNULL)
         for user in ("alice","bob","charlie","dana"):
             subprocess.run([admin,str(db),"user",user,user.title()],input=user+"-password\n",text=True,check=True,stdout=subprocess.DEVNULL)
         children=[];buffers={};server=None;nat_helpers=[];namespace_ids=set()
@@ -122,6 +124,7 @@ def main():
                     "Guide.ShowGameInvite -> Guide acceptance -> InviteAccepted -> synchronous JoinInvited," if invite else "property-filtered Find,",
                     "complete GamerJoined replay, shared machines, six verified packets each way incl. 32KiB and in-order,",
                     "host properties/join-in-progress and StartGame/EndGame observed remotely, per-machine EndGame leaderboard commits read back by both,",
+                    "Ranked arbitrated rows from both machines resolved by agreement," if kind=="ranked" else "",
                     "client leave -> GamerLeft" if kind=="player" else "host leave -> SessionEnded(HostEndedSession)")
             if isolated:
                 assert len(namespace_ids)==4,"two separate NAT clients per category"

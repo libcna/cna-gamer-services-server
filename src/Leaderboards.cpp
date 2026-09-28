@@ -113,6 +113,20 @@ Json Service::abortLeaderboardGame(const std::string& user,const std::string& ga
     if(!scope.text(1).empty())throw Error("INVALID_STATE");
     Statement remove(store_.db(),"DELETE FROM leaderboard_games WHERE id=?");remove.bind(1,gameplay);(void)remove.row();return Json::object();
 }
+namespace {
+struct BoardPolicy {bool ascending=false,latest=false,arbitrated=false;Json columns;};
+BoardPolicy policyFor(sqlite3* db,const std::string& game,const std::string& key,long long mode) {
+    Statement definition(db,"SELECT ascending,aggregation,arbitrated,columns FROM leaderboards WHERE game_id=? AND key=? AND mode=?");
+    definition.bind(1,game);definition.bind(2,key);definition.bind(3,mode);if(!definition.row())throw Error("NOT_FOUND");
+    return BoardPolicy{definition.number(0)!=0,definition.text(1)=="latest",definition.number(2)!=0,Json::parse(definition.text(3))};
+}
+void writeEntry(sqlite3* db,const std::string& game,const std::string& key,long long mode,const std::string& user,
+    long long rating,const std::string& columns,const BoardPolicy& policy,long long timestamp) {
+    Statement write(db,"INSERT INTO leaderboard_entries(game_id,key,mode,user_id,rating,columns,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(game_id,key,mode,user_id) DO UPDATE SET rating=excluded.rating,columns=excluded.columns,updated=excluded.updated WHERE ?=1 OR (?=1 AND excluded.rating<leaderboard_entries.rating) OR (?=0 AND excluded.rating>leaderboard_entries.rating)");
+    write.bind(1,game);write.bind(2,key);write.bind(3,mode);write.bind(4,user);write.bind(5,rating);write.bind(6,columns);write.bind(7,timestamp);
+    write.bind(8,policy.latest?1LL:0LL);write.bind(9,policy.ascending?1LL:0LL);write.bind(10,policy.ascending?1LL:0LL);(void)write.row();
+}
+}
 Json Service::commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
     const auto gameplay=stringField(args,"gameplay",32);
     if(!args.contains("entries")||!args["entries"].is_array()||args["entries"].size()>128)throw Error("LIMIT_EXCEEDED");
@@ -121,28 +135,97 @@ Json Service::commitLeaderboardGame(const std::string& user,const std::string& g
     if(scope.text(0)!=user)throw Error("NOT_AUTHORIZED");
     const auto digest=sha256(args["entries"].dump());
     if(!scope.text(1).empty()){if(scope.text(1)!=digest)throw Error("INVALID_STATE");return Json::object();}
+    // Optional Ranked context: arbitrated rows become this machine's report for the round.
+    std::string round,machine;std::set<std::string> roundUsers;
+    if(args.contains("arbitration")) {
+        const auto& context=args["arbitration"];
+        if(!context.is_object()||context.size()!=2)throw Error("INVALID_ARGUMENT");
+        const auto session=stringField(context,"session",32);
+        if(session.size()!=32||session.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+        const auto revision=integerField(context,"revision",1,2147483647);
+        Statement found(store_.db(),"SELECT id,members FROM arbitration_rounds WHERE game_id=? AND session_id=? AND start_revision<=? AND (end_revision IS NULL OR end_revision>=?) ORDER BY start_revision DESC LIMIT 1");
+        found.bind(1,game);found.bind(2,session);found.bind(3,revision);found.bind(4,revision);
+        if(!found.row())throw Error("NOT_FOUND");
+        round=found.text(0);
+        for(const auto& member:Json::parse(found.text(1))) {
+            roundUsers.insert(member["userId"].get<std::string>());
+            if(member["userId"]==user)machine=member["machine"].get<std::string>();
+        }
+        if(machine.empty())throw Error("NOT_AUTHORIZED");
+    }
     std::set<std::tuple<std::string,std::string,long long>> unique;
-    struct Pending {std::string user,key,columns;long long mode,rating;bool latest,ascending;};std::vector<Pending> rows;
+    struct Pending {std::string user,key,columns;long long mode,rating;BoardPolicy policy;};std::vector<Pending> rows;
+    Json reported=Json::array();
     for(const auto& entry:args["entries"]) {
         const auto target=stringField(entry,"userId",64),key=stringField(entry,"key",64);
         const auto mode=integerField(entry,"mode",-2147483648LL,2147483647LL),rating=integerField(entry,"rating",std::numeric_limits<long long>::min(),std::numeric_limits<long long>::max());
         if(!unique.emplace(target,key,mode).second)throw Error("INVALID_ARGUMENT");
-        Statement member(store_.db(),"SELECT 1 FROM leaderboard_game_members WHERE gameplay_id=? AND user_id=?");member.bind(1,gameplay);member.bind(2,target);if(!member.row())throw Error("NOT_AUTHORIZED");
-        Statement definition(store_.db(),"SELECT ascending,aggregation,arbitrated,columns FROM leaderboards WHERE game_id=? AND key=? AND mode=?");definition.bind(1,game);definition.bind(2,key);definition.bind(3,mode);if(!definition.row())throw Error("NOT_FOUND");
-        if(definition.number(2))throw Error("NOT_AUTHORIZED");
+        const auto policy=policyFor(store_.db(),game,key,mode);
         if(!entry.contains("columns"))throw Error("INVALID_ARGUMENT");
-        validateColumns(entry["columns"],parse(definition.text(3)));
-        rows.push_back({target,key,entry["columns"].dump(),mode,rating,definition.text(1)=="latest",definition.number(0)!=0});
+        validateColumns(entry["columns"],policy.columns);
+        if(policy.arbitrated) {
+            // Arbitrated statistics are reported by every machine for every gamer of the round.
+            if(round.empty()||!roundUsers.contains(target))throw Error("NOT_AUTHORIZED");
+            reported.push_back(Json{{"userId",target},{"key",key},{"mode",mode},{"rating",rating},{"columns",entry["columns"]}});
+            continue;
+        }
+        // Nonarbitrated statistics are written only by their own machine's epoch.
+        Statement member(store_.db(),"SELECT 1 FROM leaderboard_game_members WHERE gameplay_id=? AND user_id=?");member.bind(1,gameplay);member.bind(2,target);if(!member.row())throw Error("NOT_AUTHORIZED");
+        rows.push_back({target,key,entry["columns"].dump(),mode,rating,policy});
     }
     store_.exec("BEGIN IMMEDIATE");
     try {
-        for(const auto& row:rows) {
-            Statement write(store_.db(),"INSERT INTO leaderboard_entries(game_id,key,mode,user_id,rating,columns,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(game_id,key,mode,user_id) DO UPDATE SET rating=excluded.rating,columns=excluded.columns,updated=excluded.updated WHERE ?=1 OR (?=1 AND excluded.rating<leaderboard_entries.rating) OR (?=0 AND excluded.rating>leaderboard_entries.rating)");
-            write.bind(1,game);write.bind(2,row.key);write.bind(3,row.mode);write.bind(4,row.user);write.bind(5,row.rating);write.bind(6,row.columns);write.bind(7,now());write.bind(8,row.latest?1LL:0LL);write.bind(9,row.ascending?1LL:0LL);write.bind(10,row.ascending?1LL:0LL);(void)write.row();
+        const auto timestamp=now();
+        for(const auto& row:rows)writeEntry(store_.db(),game,row.key,row.mode,row.user,row.rating,row.columns,row.policy,timestamp);
+        if(!round.empty()) {
+            const auto report=reported.dump(),reportDigest=sha256(report);
+            Statement existing(store_.db(),"SELECT digest FROM arbitration_submissions WHERE round_id=? AND machine_id=?");existing.bind(1,round);existing.bind(2,machine);
+            if(existing.row()) {if(existing.text(0)!=reportDigest)throw Error("INVALID_STATE");}
+            else {
+                Statement insert(store_.db(),"INSERT INTO arbitration_submissions(round_id,machine_id,entries,digest) VALUES(?,?,?,?)");
+                insert.bind(1,round);insert.bind(2,machine);insert.bind(3,report);insert.bind(4,reportDigest);(void)insert.row();
+            }
+            Statement touch(store_.db(),"UPDATE arbitration_rounds SET updated=? WHERE id=?");touch.bind(1,timestamp);touch.bind(2,round);(void)touch.row();
         }
         Statement close(store_.db(),"UPDATE leaderboard_games SET committed=? WHERE id=?");close.bind(1,digest);close.bind(2,gameplay);(void)close.row();store_.exec("COMMIT");
     }catch(...){store_.exec("ROLLBACK");throw;}
+    resolveArbitration(game,round);
     return Json::object();
+}
+void Service::resolveArbitration(const std::string& game,const std::string& round) {
+    const auto timestamp=now();
+    // Complete rounds resolve immediately; ended rounds after 60 s and abandoned ones after a day.
+    std::vector<std::string> due;
+    Statement ready(store_.db(),"SELECT r.id FROM arbitration_rounds r WHERE r.game_id=? AND r.resolved=0 AND (r.id=? AND (SELECT COUNT(*) FROM arbitration_submissions s WHERE s.round_id=r.id)>=json_array_length(r.machines) OR (r.end_revision IS NOT NULL AND r.updated<?) OR r.created<?) LIMIT 8");
+    ready.bind(1,game);ready.bind(2,round);ready.bind(3,timestamp-60);ready.bind(4,timestamp-86400);
+    while(ready.row())due.push_back(ready.text(0));
+    for(const auto& id:due) {
+        store_.exec("BEGIN IMMEDIATE");
+        try {
+            std::vector<Json> reports;
+            Statement submissions(store_.db(),"SELECT entries FROM arbitration_submissions WHERE round_id=?");submissions.bind(1,id);
+            while(submissions.row())reports.push_back(Json::parse(submissions.text(0)));
+            // A row is committed only when a strict majority of the machines that reported it agree
+            // exactly. Finishing machines report every gamer, so a machine that left early and
+            // reported only its own gamers still needs their agreement.
+            std::map<std::tuple<std::string,std::string,long long>,std::map<std::string,std::pair<int,Json>>> votes;
+            for(const auto& report:reports)for(const auto& row:report) {
+                auto& tally=votes[{row["userId"].get<std::string>(),row["key"].get<std::string>(),row["mode"].get<long long>()}][row.dump()];
+                ++tally.first;tally.second=row;
+            }
+            for(const auto& [identity,candidates]:votes) {
+                int reporters=0;for(const auto& [value,tally]:candidates)reporters+=tally.first;
+                for(const auto& [value,tally]:candidates) {
+                if(tally.first*2<=reporters)continue;
+                const auto& row=tally.second;const auto& [target,key,mode]=identity;
+                writeEntry(store_.db(),game,key,mode,target,row["rating"].get<long long>(),row["columns"].dump(),policyFor(store_.db(),game,key,mode),timestamp);
+                }
+            }
+            Statement done(store_.db(),"UPDATE arbitration_rounds SET resolved=1,updated=? WHERE id=?");done.bind(1,timestamp);done.bind(2,id);(void)done.row();
+            store_.exec("COMMIT");
+        }catch(...){store_.exec("ROLLBACK");}
+    }
+    Statement prune(store_.db(),"DELETE FROM arbitration_rounds WHERE resolved=1 AND updated<?");prune.bind(1,timestamp-86400);(void)prune.row();
 }
 
 }

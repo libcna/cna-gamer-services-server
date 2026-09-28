@@ -33,6 +33,7 @@ private:
     Json beginLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
     Json commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
     Json abortLeaderboardGame(const std::string& user,const std::string& game,const Json& args);
+    void resolveArbitration(const std::string& game,const std::string& round);
     Json issueCredentials(const std::string& user,const std::string& game,const std::string& family={});
     Json refreshCredentials(const std::string& game,const Json& args);
     void revokeFamily(const std::string& family);
