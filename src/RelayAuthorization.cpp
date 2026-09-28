@@ -28,7 +28,10 @@ Json Service::issueRelayTicket(const std::string& user,const std::string& game,c
     Statement current(store_.db(),"SELECT id FROM directory_sessions WHERE id=? AND game_id=?");current.bind(1,session);current.bind(2,game);
     if(!current.row())throw Error("NOT_FOUND");
     Statement owner(store_.db(),"SELECT id FROM directory_machines WHERE session_id=? AND owner_id=?");owner.bind(1,session);owner.bind(2,user);
-    if(!owner.row())throw Error("NOT_AUTHORIZED");
+    if(!owner.row()) {
+        Statement removed(store_.db(),"SELECT 1 FROM directory_removals WHERE session_id=? AND user_id=?");removed.bind(1,session);removed.bind(2,user);
+        throw Error(removed.row()?"REMOVED_BY_HOST":"NOT_AUTHORIZED");
+    }
     const auto machine=owner.text(0);
     std::set<std::string> roster;Statement members(store_.db(),"SELECT user_id FROM directory_members WHERE machine_id=?");members.bind(1,machine);
     while(members.row())roster.insert(members.text(0));

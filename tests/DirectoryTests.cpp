@@ -108,10 +108,10 @@ int main() {
         check(call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"]["currentGamers"]==2,"refused ranked joins do not add members");
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[4]})}},tokens[4])["error"]=="OK","existing ranked membership replay remains idempotent");
         const auto priorRevision=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"]["revision"].get<long long>();
-        {Store admin(path.string());admin.exec("DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
+        {Store admin(path.string());admin.exec("DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
         check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"legacy ranked flag cannot expose gameplay");
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","legacy ranked flag cannot allow gameplay join");
-        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==12,"ranked policy schema upgrade");}
+        {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==13,"ranked policy schema upgrade");}
         auto migrated=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];
         check(migrated["allowJoinInProgress"]==false&&migrated["revision"]==priorRevision+1,"migration repairs flag and revision");
         check(migrated["currentGamers"]==2,"migration preserves authenticated membership");
@@ -124,6 +124,31 @@ int main() {
         check(call(service,"sessions.join",{{"session",fullId},{"participants",Json::array({tokens[4]})}},tokens[4])["error"]=="SESSION_FULL","public join cannot consume private reservation");
         check(call(service,"sessions.get",{{"session","../database"}},tokens[0])["error"]=="INVALID_ARGUMENT","no caller paths");
         check(call(service,"sessions.leave",{{"session",fullId}},tokens[0])["error"]=="OK","cleanup full session");
+        // XNA NetworkMachine.RemoveFromSession: only the host, never its own machine; the removed
+        // users hear REMOVED_BY_HOST, relay tickets included, and everyone else keeps playing.
+        {
+            create["kind"]="player";create["maxGamers"]=8;create["privateSlots"]=0;create["participants"]=Json::array({tokens[0]});
+            auto hosted=call(service,"sessions.create",create,tokens[0]);check(hosted["error"]=="OK","removal fixture host");
+            const auto hostedId=hosted["result"]["session"].get<std::string>();const auto hostMachine=hosted["result"]["machine"].get<std::string>();
+            auto guest=call(service,"sessions.join",{{"session",hostedId},{"participants",Json::array({tokens[1],tokens[2]})}},tokens[1]);
+            auto other=call(service,"sessions.join",{{"session",hostedId},{"participants",Json::array({tokens[3]})}},tokens[3]);
+            check(guest["error"]=="OK"&&other["error"]=="OK","removal fixture joins");
+            const auto guestMachine=guest["result"]["machine"].get<std::string>();
+            const auto before=call(service,"sessions.get",{{"session",hostedId}},tokens[0])["result"]["revision"].get<long long>();
+            check(call(service,"sessions.remove",{{"session",hostedId},{"machine",guestMachine}},tokens[3])["error"]=="NOT_AUTHORIZED","only the host removes");
+            check(call(service,"sessions.remove",{{"session",hostedId},{"machine",hostMachine}},tokens[0])["error"]=="INVALID_ARGUMENT","host cannot remove itself");
+            check(call(service,"sessions.remove",{{"session",hostedId},{"machine","0123456789abcdef0123456789abcdef"}},tokens[0])["error"]=="NOT_FOUND","unknown machine");
+            check(call(service,"sessions.remove",{{"session",hostedId},{"machine","../x"}},tokens[0])["error"]=="INVALID_ARGUMENT","machine id format");
+            auto removed=call(service,"sessions.remove",{{"session",hostedId},{"machine",guestMachine}},tokens[0]);
+            check(removed["error"]=="OK"&&removed["result"]["members"].size()==2&&removed["result"]["revision"].get<long long>()==before+1,"machine removed, revision advanced");
+            for(const auto& user:{tokens[1],tokens[2]})
+                check(call(service,"sessions.get",{{"session",hostedId}},user)["error"]=="REMOVED_BY_HOST","removed user is told why");
+            check(call(service,"sessions.touch",{{"session",hostedId}},tokens[1])["error"]=="REMOVED_BY_HOST","removed machine heartbeat");
+            check(call(service,"sessions.relayTicket",{{"session",hostedId},{"participants",Json::array({tokens[1],tokens[2]})}},tokens[1])["error"]=="REMOVED_BY_HOST","removed machine gets no relay ticket");
+            check(call(service,"sessions.get",{{"session",hostedId}},tokens[3])["error"]=="OK","other machine unaffected");
+            check(call(service,"sessions.get",{{"session",hostedId}},tokens[4])["error"]=="NOT_AUTHORIZED","never-member still NOT_AUTHORIZED");
+            check(call(service,"sessions.leave",{{"session",hostedId}},tokens[0])["result"]["ended"]==true,"cleanup removal fixture");
+        }
         for(const auto& bad:{Json(0),Json(5),Json(-1),Json(18446744073709551615ULL),Json(1.5),Json(true)}) {
             auto request=find;request["localCount"]=bad;check(call(service,"sessions.find",request,tokens[1])["error"]=="INVALID_ARGUMENT","bounded search locals");
         }

@@ -73,6 +73,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         {"sessions.find",{"kind","localCount","properties","start","limit"}},
         {"sessions.join",{"session","participants"}},{"sessions.joinInvited",{"session","invite","participants"}},
         {"sessions.get",{"session"}},{"sessions.touch",{"session"}},{"sessions.leave",{"session"}},
+        {"sessions.remove",{"session","machine"}},
         {"sessions.update",{"session","revision","maxGamers","privateSlots","properties","state","allowJoinInProgress"}}};
     const auto definition=fields.find(op);if(definition==fields.end())throw Error("UNKNOWN_OPERATION");
     if(args.size()!=definition->second.size())throw Error("INVALID_ARGUMENT");
@@ -166,7 +167,12 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
     }
     Statement member(store_.db(),"SELECT m.machine_id FROM directory_members m WHERE m.session_id=? AND m.user_id=?");member.bind(1,id);member.bind(2,user);
-    if(!member.row())throw Error("NOT_AUTHORIZED");
+    if(!member.row()) {
+        // A user the host removed learns that, rather than only that the membership is gone.
+        Statement removed(store_.db(),"SELECT 1 FROM directory_removals WHERE session_id=? AND user_id=?");removed.bind(1,id);removed.bind(2,user);
+        if(removed.row())throw Error("REMOVED_BY_HOST");
+        throw Error("NOT_AUTHORIZED");
+    }
     const auto machine=member.text(0);
     Statement owner(store_.db(),"SELECT owner_id FROM directory_machines WHERE id=?");owner.bind(1,machine);(void)owner.row();
     if(op=="sessions.get") {auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;}
@@ -182,6 +188,20 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         Statement remove(store_.db(),ended?"DELETE FROM directory_sessions WHERE id=?":"DELETE FROM directory_machines WHERE id=?");remove.bind(1,ended?id:machine);(void)remove.row();
         if(!ended){Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();}
         transaction.commit();return Json{{"ended",ended}};
+    }
+    if(op=="sessions.remove") {
+        // XNA NetworkMachine.RemoveFromSession: the host removes another machine and all its users.
+        if(owner.text(0)!=user||machine!=session.text(1))throw Error("NOT_AUTHORIZED");
+        const auto target=stringField(args,"machine",32);
+        if(target.size()!=32||target.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+        if(target==machine)throw Error("INVALID_ARGUMENT");
+        Statement exists(store_.db(),"SELECT 1 FROM directory_machines WHERE id=? AND session_id=?");exists.bind(1,target);exists.bind(2,id);
+        if(!exists.row())throw Error("NOT_FOUND");
+        Statement mark(store_.db(),"INSERT OR IGNORE INTO directory_removals(session_id,user_id) SELECT session_id,user_id FROM directory_members WHERE machine_id=?");
+        mark.bind(1,target);(void)mark.row();
+        Statement remove(store_.db(),"DELETE FROM directory_machines WHERE id=?");remove.bind(1,target);(void)remove.row();
+        Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();
+        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
     }
     if(op=="sessions.update") {
         if(session.text(0)!=user||machine!=session.text(1))throw Error("NOT_AUTHORIZED");
