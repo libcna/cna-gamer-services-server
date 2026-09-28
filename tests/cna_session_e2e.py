@@ -33,6 +33,9 @@ def main():
         admin=str(build/"cna-gamer-services-admin")
         for game in ("one","two"):
             subprocess.run([admin,str(db),"title",game,game],check=True,stdout=subprocess.DEVNULL)
+        board='{"key":"BestScoreLifeTime","mode":0,"ascending":false,"aggregation":"best","arbitrated":false,"columns":{"Rounds":"int32"}}'
+        for game in ("one","two"):
+            subprocess.run([admin,str(db),"leaderboard",game],input=board,text=True,check=True,stdout=subprocess.DEVNULL)
         for user in ("alice","bob","charlie","dana"):
             subprocess.run([admin,str(db),"user",user,user.title()],input=user+"-password\n",text=True,check=True,stdout=subprocess.DEVNULL)
         children=[];buffers={};server=None;nat_helpers=[];namespace_ids=set()
@@ -118,7 +121,7 @@ def main():
                 print(kind,"public XNA NetworkSession: two CNA processes/four Guide-signed-in accounts, pending Begin/End with one owner-thread callback,",
                     "Guide.ShowGameInvite -> Guide acceptance -> InviteAccepted -> synchronous JoinInvited," if invite else "property-filtered Find,",
                     "complete GamerJoined replay, shared machines, six verified packets each way incl. 32KiB and in-order,",
-                    "host properties/join-in-progress and StartGame/EndGame observed remotely,",
+                    "host properties/join-in-progress and StartGame/EndGame observed remotely, per-machine EndGame leaderboard commits read back by both,",
                     "client leave -> GamerLeft" if kind=="player" else "host leave -> SessionEnded(HostEndedSession)")
             if isolated:
                 assert len(namespace_ids)==4,"two separate NAT clients per category"
