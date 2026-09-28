@@ -104,7 +104,7 @@ def main():
                 send(host,remote+"\n");read(host,"relay-ready");read(join,"relay-ready")
                 send(host,"continue\n");send(join,"continue\n")
                 read(host,"relay-exchanged");read(join,"relay-exchanged")
-                print(kind,"two CNA processes/four local accounts exchanged four verified ENet application packets each way, including 32KiB fragmentation and unreliable channel")
+                print(kind,"two CNA processes/four local accounts exchanged four verified ENet application packets each way, including 32KiB fragmentation and unreliable channel; forged existing sender and unknown target refused before delivery")
                 if kind=="player":
                     subprocess.run([admin,str(db),"revoke-user","dana"],check=True,stdout=subprocess.DEVNULL)
                     send(join,"continue\n");done(join)

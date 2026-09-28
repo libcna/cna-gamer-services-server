@@ -138,3 +138,18 @@ This is shared-host NAT-isolation evidence, not public Internet deployment/laten
 Public XNA online lifecycle, reconnect/resume and eventual direct/P2P optimization remain separate
 implementation/acceptance work. Test prerequisite absence is an explicit skip, not a passing NAT
 result. See README for reproduction and test-helper licensing.
+
+## Client game admission boundary (GS-008c3c1)
+
+CNR authorization identifies the sending machine and its title/session membership. The relay
+continues forwarding opaque ENet bytes. CNA's game receiver separately verifies exact gamer
+claims against authenticated directory membership and completed realtime machine groups. Host
+receivers require a game sender from the authenticated source group; clients receive only
+host-relayed messages for known admitted remote senders and their own local targets. Validate
+logical lengths/options/channels and membership before allocating a game payload copy.
+Directory reservation alone is not a completed realtime handshake. State/properties must match
+service authority. Host leave broadcasts may name only complete admitted remote groups; arbitrary
+unknown/partial leave or end claims cannot replace authority reconciliation. These client rules do not change CNR v1/golden envelope bytes, impose XNA objects
+on the server or provide malicious-host anti-cheat. Native tests now refuse a forged existing
+sender ID and unknown target while preserving actual fragmented/unreliable ENet exchange in
+both localhost and separate outbound-NAT namespaces. Public XNA lifecycle remains unfinished.

@@ -273,3 +273,12 @@ fake-clock unit tests cover one-second polling and thirty-second independent ren
 owner publication, cancellation, stable failure/explicit same-origin retry and queue saturation.
 This is control-state pumping only. Conversion into XNA gamer/lifecycle events, relay status,
 ENet welcome completion and public online Create/Join remain unfinished.
+
+GS-008c3c1 applies CNA's service-bound packet policy in the actual native relay probes. Before
+copying game payloads, the client validates the authenticated relay source, completed realtime
+machine groups, sender ownership, target membership, options/channel and the 1MiB logical packet
+limit. The host refuses a forged existing sender and an unknown target without delivering either,
+while all four legitimate fragmented/unreliable packets still arrive each way. Control direction,
+complete groups and directory-owned state/properties are validated before game-object mutation.
+Native and separate rootless-NAT relay cases pass. This is a client admission boundary, not new
+server game parsing, public NetworkSession lifecycle completeness or malicious-host anti-cheat.
