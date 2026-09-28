@@ -1,4 +1,20 @@
+# Build products and local development state.
 /build*/
+/.idea/
+/.vscode/
+/CMakeUserPresets.json
+/service-data/
 *.sqlite3*
-*.pem
+*.db-wal
+*.db-shm
+*.log
 __pycache__/
+*.py[cod]
+
+# Private deployment credentials and TLS material.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx

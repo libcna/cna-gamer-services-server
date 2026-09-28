@@ -51,3 +51,6 @@ printf '%s' '{"key":"BestScoreLifeTime","mode":0,"gamertag":"Alice","rating":123
 These administration seeds are fixtures. Online clients read persisted paged, centered or restricted
 boards; gameplay setters are transient until session-authorized commits are implemented. No Ranked,
 TrueSkill or EndGame submission capability is claimed yet. SQLite >=3.38 supplies JSON table filtering.
+
+Original server source, protocol and tests use the [MIT license](LICENCE). See
+[dependency notices](THIRD_PARTY.md) for the independently licensed transport/database/JSON libraries.
