@@ -27,9 +27,9 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","invites.send","invites.list","invites.get","invites.accept","invites.dismiss"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","session-directory","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","session-directory","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
@@ -137,6 +137,64 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         const auto bytes=asset.blob(2);constexpr char digits[]="0123456789abcdef";std::string encoded;encoded.reserve(bytes.size()*2);
         for(unsigned char byte:bytes){encoded+=digits[byte>>4];encoded+=digits[byte&15];}
         return Json{{"hash",hash},{"size",asset.number(0)},{"mime",asset.text(1)},{"offset",offset},{"hex",encoded}};
+    }
+    if(op=="messages.send") {
+        // Guide Compose: 1..100 recipients, text <=256 UTF-8 bytes; bounded inbox and sender rate.
+        const auto text=stringField(a,"text",256);
+        if(!a.contains("gamertags")||!a["gamertags"].is_array()||a["gamertags"].empty()||a["gamertags"].size()>100)throw Error("INVALID_ARGUMENT");
+        Statement rate(store_.db(),"SELECT COUNT(*) FROM messages WHERE sender_id=? AND created>?");rate.bind(1,user);rate.bind(2,timestamp-3600);(void)rate.row();
+        if(rate.number(0)+static_cast<long long>(a["gamertags"].size())>200)throw Error("RATE_LIMITED");
+        std::vector<std::string> recipients;std::set<std::string> seen;
+        for(const auto& tag:a["gamertags"]) {
+            if(!tag.is_string())throw Error("INVALID_ARGUMENT");
+            Statement target(store_.db(),"SELECT id FROM users WHERE gamertag=?");target.bind(1,tag.get<std::string>());
+            if(!target.row())throw Error("NOT_FOUND");
+            if(target.text(0)==user||!seen.insert(target.text(0)).second)throw Error("INVALID_ARGUMENT");
+            Statement inbox(store_.db(),"SELECT COUNT(*) FROM messages WHERE recipient_id=?");inbox.bind(1,target.text(0));(void)inbox.row();
+            if(inbox.number(0)>=100)throw Error("LIMIT_EXCEEDED");
+            recipients.push_back(target.text(0));
+        }
+        store_.exec("BEGIN IMMEDIATE");
+        try {
+            for(const auto& recipient:recipients) {
+                Statement insert(store_.db(),"INSERT INTO messages(id,sender_id,recipient_id,text,created) VALUES(?,?,?,?,?)");
+                insert.bind(1,randomHex(16));insert.bind(2,user);insert.bind(3,recipient);insert.bind(4,text);insert.bind(5,timestamp);(void)insert.row();
+            }
+            store_.exec("COMMIT");
+        }catch(...){store_.exec("ROLLBACK");throw;}
+        return Json{{"sent",recipients.size()}};
+    }
+    if(op=="messages.list") {
+        const auto start=integerField(a,"start",0,100),limit=integerField(a,"limit",1,32);
+        Statement total(store_.db(),"SELECT COUNT(*),SUM(read=0) FROM messages WHERE recipient_id=?");total.bind(1,user);(void)total.row();
+        Statement page(store_.db(),"SELECT m.id,u.gamertag,m.text,m.created,m.read FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.recipient_id=? ORDER BY m.created DESC,m.id LIMIT ? OFFSET ?");
+        page.bind(1,user);page.bind(2,limit);page.bind(3,start);
+        Json rows=Json::array();
+        while(page.row())rows.push_back(Json{{"message",page.text(0)},{"sender",page.text(1)},{"text",page.text(2)},{"created",page.number(3)},{"read",page.number(4)!=0}});
+        return Json{{"start",start},{"total",total.number(0)},{"unread",total.number(1)},{"messages",rows}};
+    }
+    if(op=="messages.read"||op=="messages.delete") {
+        const auto id=stringField(a,"message",32);
+        if(id.size()!=32||id.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+        Statement owned(store_.db(),"SELECT 1 FROM messages WHERE id=? AND recipient_id=?");owned.bind(1,id);owned.bind(2,user);
+        if(!owned.row())throw Error("NOT_FOUND");
+        Statement change(store_.db(),op=="messages.read"?"UPDATE messages SET read=1 WHERE id=?":"DELETE FROM messages WHERE id=?");change.bind(1,id);(void)change.row();
+        return Json::object();
+    }
+    if(op=="reviews.submit") {
+        // Guide Player Review: prefer/avoid feedback; "clear" withdraws it. Avoided hosts are not
+        // offered by this reviewer's matchmaking searches.
+        const auto rating=stringField(a,"rating",16);
+        if(rating!="prefer"&&rating!="avoid"&&rating!="clear")throw Error("INVALID_ARGUMENT");
+        Statement target(store_.db(),"SELECT id FROM users WHERE gamertag=?");target.bind(1,stringField(a,"gamertag",32));
+        if(!target.row())throw Error("NOT_FOUND");
+        if(target.text(0)==user)throw Error("INVALID_ARGUMENT");
+        Statement cap(store_.db(),"SELECT COUNT(*) FROM player_reviews WHERE reviewer_id=?");cap.bind(1,user);(void)cap.row();
+        if(rating!="clear"&&cap.number(0)>=1024)throw Error("LIMIT_EXCEEDED");
+        Statement change(store_.db(),rating=="clear"?"DELETE FROM player_reviews WHERE reviewer_id=? AND subject_id=?":
+            "INSERT INTO player_reviews(reviewer_id,subject_id,rating,updated) VALUES(?,?,?,?) ON CONFLICT(reviewer_id,subject_id) DO UPDATE SET rating=excluded.rating,updated=excluded.updated");
+        change.bind(1,user);change.bind(2,target.text(0));if(rating!="clear"){change.bind(3,rating);change.bind(4,timestamp);}(void)change.row();
+        return Json::object();
     }
     if(op.starts_with("invites."))return invitations(user,game,op,a);
     if(op=="sessions.relayTicket")return issueRelayTicket(user,game,a);
