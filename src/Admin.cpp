@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MS-PL
 #include "CnaService/Store.hpp"
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 int main(int argc,char** argv) {
     try {
         if(argc<3)throw CnaService::Error("INVALID_ARGUMENT");
@@ -12,6 +14,11 @@ int main(int argc,char** argv) {
         } else if(command=="achievement"&&argc==4) {
             std::string data((std::istreambuf_iterator<char>(std::cin)),{});
             store.achievement(argv[3],CnaService::parse(data));
+        } else if(command=="asset"&&argc==6) {
+            if(std::filesystem::file_size(argv[5])>16777216)throw CnaService::Error("LIMIT_EXCEEDED");
+            std::ifstream input(argv[5],std::ios::binary);if(!input)throw CnaService::Error("NOT_FOUND");
+            std::string bytes((std::istreambuf_iterator<char>(input)),{});std::cout<<store.asset(argv[3],argv[4],bytes)<<'\n';
+        } else if(command=="picture"&&argc==5) {store.picture(argv[3],argv[4]);
         } else if(command=="inspect"&&argc==3) {
             for(const auto* sql:{"SELECT COUNT(*) FROM users","SELECT COUNT(*) FROM titles","SELECT COUNT(*) FROM sessions","SELECT COUNT(*) FROM earned"}) {
                 CnaService::Statement s(store.db(),sql);(void)s.row();std::cout<<s.number(0)<<'\n';

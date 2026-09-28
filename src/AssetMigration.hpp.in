@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MS-PL
+#pragma once
+namespace CnaService { inline constexpr const char* AssetMigration = R"CNA_SQL(@CNA_ASSET_MIGRATION@)CNA_SQL"; }

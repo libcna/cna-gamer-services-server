@@ -17,19 +17,19 @@ std::string Service::handle(std::string_view bytes,std::string_view peer) {
       catch (...) { return response(id,"INTERNAL_ERROR").dump(); }
 }
 Json Service::identity(const std::string& id) {
-    Statement s(store_.db(),"SELECT id,gamertag,motto,region,online_allowed FROM users WHERE id=?");s.bind(1,id);
+    Statement s(store_.db(),"SELECT id,gamertag,motto,region,online_allowed,picture FROM users WHERE id=?");s.bind(1,id);
     if (!s.row()) throw Error("NOT_FOUND");
     Statement score(store_.db(),"SELECT COALESCE(SUM(a.score),0),COUNT(*) FROM earned e JOIN achievements a ON a.game_id=e.game_id AND a.key=e.key WHERE e.user_id=?");
     score.bind(1,id);(void)score.row();
     return Json{{"userId",s.text(0)},{"gamertag",s.text(1)},{"displayName",s.text(1)},{"motto",s.text(2)},
-        {"region",s.text(3)},{"allowOnlineSessions",s.number(4)!=0},{"gamerScore",score.number(0)},{"totalAchievements",score.number(1)}};
+        {"region",s.text(3)},{"allowOnlineSessions",s.number(4)!=0},{"gamerScore",score.number(0)},{"totalAchievements",score.number(1)},{"picture",s.text(5)}};
 }
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","friend-requests","presence","achievements"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","friend-requests","presence","achievements","assets"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
@@ -122,6 +122,21 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
                 {"accepted",accepted},{"requestSent",!accepted&&s.number(5)!=0},{"requestReceived",!accepted&&s.number(6)!=0}});
         }
         return Json{{"friends",friends}};
+    }
+    if(op=="assets.read") {
+        const auto hash=stringField(a,"hash",64);
+        if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+        for(const auto* key:{"offset","length"})if(!a.contains(key)||!a[key].is_number_integer()||a[key]<0)throw Error("INVALID_ARGUMENT");
+        const auto offset=a["offset"].get<long long>(),length=a["length"].get<long long>();
+        if(offset>16777216||length<1||length>12288)throw Error("LIMIT_EXCEEDED");
+        Statement authorized(store_.db(),"SELECT 1 FROM title_assets WHERE game_id=? AND hash=? UNION SELECT 1 FROM users WHERE picture=? LIMIT 1");
+        authorized.bind(1,game);authorized.bind(2,hash);authorized.bind(3,hash);if(!authorized.row())throw Error("NOT_FOUND");
+        Statement asset(store_.db(),"SELECT size,mime,substr(bytes,?,?) FROM assets WHERE hash=?");
+        asset.bind(1,offset+1);asset.bind(2,length);asset.bind(3,hash);if(!asset.row())throw Error("NOT_FOUND");
+        if(offset>=asset.number(0))throw Error("INVALID_ARGUMENT");
+        const auto bytes=asset.blob(2);constexpr char digits[]="0123456789abcdef";std::string encoded;encoded.reserve(bytes.size()*2);
+        for(unsigned char byte:bytes){encoded+=digits[byte>>4];encoded+=digits[byte&15];}
+        return Json{{"hash",hash},{"size",asset.number(0)},{"mime",asset.text(1)},{"offset",offset},{"hex",encoded}};
     }
     if (op=="achievements.award") {
         const auto key=stringField(a,"key",64);if(!identifier(key))throw Error("INVALID_ARGUMENT");

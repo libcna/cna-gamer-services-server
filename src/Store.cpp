@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MS-PL
 #include "CnaService/Store.hpp"
 #include "InitialMigration.hpp"
+#include "AssetMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -47,6 +48,14 @@ void Statement::bind(int index,std::string_view value) {
     if (sqlite3_bind_text(statement_,index,value.data(),static_cast<int>(value.size()),SQLITE_TRANSIENT)!=SQLITE_OK)
         throw Error("INTERNAL_ERROR");
 }
+void Statement::blob(int index,std::string_view value) {
+    if(value.size()>16777216||sqlite3_bind_blob(statement_,index,value.data(),static_cast<int>(value.size()),SQLITE_TRANSIENT)!=SQLITE_OK)
+        throw Error("LIMIT_EXCEEDED");
+}
+std::string Statement::blob(int index) const {
+    const auto size=sqlite3_column_bytes(statement_,index);if(size<0||size>16777216)throw Error("LIMIT_EXCEEDED");
+    const auto* bytes=static_cast<const char*>(sqlite3_column_blob(statement_,index));return bytes?std::string(bytes,size):std::string{};
+}
 void Statement::bind(int index,long long value) {
     if (sqlite3_bind_int64(statement_,index,value)!=SQLITE_OK) throw Error("INTERNAL_ERROR");
 }
@@ -72,12 +81,13 @@ Store::Store(const std::string& path) {
         Statement version(db_,"PRAGMA user_version");
         (void)version.row();
         const auto current=version.number(0);
-        if (current>1) throw Error("UNSUPPORTED_DATABASE_VERSION");
+        if (current>2) throw Error("UNSUPPORTED_DATABASE_VERSION");
         if (current==0) {
             exec("BEGIN IMMEDIATE");
             exec(InitialMigration);
             exec("COMMIT");
         }
+        if(current<2){exec("BEGIN IMMEDIATE");exec(AssetMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }
@@ -103,6 +113,41 @@ void Store::achievement(const std::string& game,const Json& a) {
     Statement s(db_,"INSERT INTO achievements(game_id,key,name,description,how_to_earn,score,display,picture) VALUES(?,?,?,?,?,?,?,?)");
     s.bind(1,game);s.bind(2,key);s.bind(3,stringField(a,"name",128));s.bind(4,stringField(a,"description",1024));
     s.bind(5,stringField(a,"howToEarn",1024));s.bind(6,a["score"].get<long long>());s.bind(7,a.value("display",true)?1LL:0LL);
-    s.bind(8,a.value("picture",std::string{}));(void)s.row();
+    const auto picture=a.value("picture",std::string{});
+    if(!picture.empty()) {
+        Statement resource(db_,"SELECT 1 FROM title_assets WHERE game_id=? AND hash=?");resource.bind(1,game);resource.bind(2,picture);
+        if(!resource.row())throw Error("NOT_FOUND");
+    }
+    s.bind(8,picture);(void)s.row();
 }
+std::string Store::asset(const std::string& game,const std::string& mime,std::string_view bytes) {
+    if(!identifier(game)||bytes.empty()||bytes.size()>16777216)throw Error("INVALID_ARGUMENT");
+    if(mime!="image/png"&&mime!="model/gltf-binary")throw Error("INVALID_ARGUMENT");
+    if(mime=="image/png"&&(bytes.size()<24||bytes.substr(0,8)!=std::string_view("\x89PNG\r\n\x1a\n",8)))throw Error("INVALID_ARGUMENT");
+    if(mime=="image/png") {
+        auto integer=[&](std::size_t offset){unsigned int value=0;for(std::size_t i=offset;i<offset+4;++i)value=(value<<8)|static_cast<unsigned char>(bytes[i]);return value;};
+        if(bytes.size()>524288||bytes.substr(12,4)!="IHDR"||integer(8)!=13||integer(16)<1||integer(16)>512||integer(20)<1||integer(20)>512)
+            throw Error("INVALID_ARGUMENT");
+    }
+    if(mime=="model/gltf-binary") {
+        if(bytes.size()<12||bytes.substr(0,4)!="glTF")throw Error("INVALID_ARGUMENT");
+        auto integer=[&](std::size_t offset){unsigned int value=0;for(int i=3;i>=0;--i)value=(value<<8)|static_cast<unsigned char>(bytes[offset+i]);return value;};
+        if(integer(4)!=2||integer(8)!=bytes.size())throw Error("INVALID_ARGUMENT");
+    }
+    const auto hash=sha256(bytes);
+    exec("BEGIN IMMEDIATE");
+    try {
+        Statement insert(db_,"INSERT OR IGNORE INTO assets(hash,mime,size,bytes) VALUES(?,?,?,?)");
+        insert.bind(1,hash);insert.bind(2,mime);insert.bind(3,static_cast<long long>(bytes.size()));insert.blob(4,bytes);(void)insert.row();
+        Statement title(db_,"INSERT OR IGNORE INTO title_assets(game_id,hash) VALUES(?,?)");title.bind(1,game);title.bind(2,hash);(void)title.row();exec("COMMIT");
+    }catch(...){exec("ROLLBACK");throw;}
+    return hash;
+}
+void Store::picture(const std::string& username,const std::string& hash) {
+    Statement asset(db_,"SELECT 1 FROM assets WHERE hash=? AND mime IN ('image/png','image/jpeg')");asset.bind(1,hash);
+    if(!asset.row())throw Error("NOT_FOUND");
+    Statement update(db_,"UPDATE users SET picture=? WHERE username=?");update.bind(1,hash);update.bind(2,username);(void)update.row();
+    if(sqlite3_changes(db_)!=1)throw Error("NOT_FOUND");
+}
+
 }

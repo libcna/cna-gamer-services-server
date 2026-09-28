@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MS-PL
 """Real TLS listener, independent client processes and restart persistence."""
-import json, os, pathlib, ssl, subprocess, sys, tempfile, urllib.request
+import json, os, pathlib, ssl, subprocess, sys, tempfile, urllib.request, struct, zlib, hashlib, selectors
 
 
 def request(url, ca, game, op, args=None, token=None):
@@ -27,9 +27,24 @@ def worker():
     os.chmod(state, 0o600)
 
 
+def line_with_timeout(stream):
+    with selectors.DefaultSelector() as selector:
+        selector.register(stream, selectors.EVENT_READ)
+        assert selector.select(15), "client coordination timeout"
+        return stream.readline()
+
+
+def original_png():
+    def chunk(kind, data):
+        return struct.pack(">I", len(data))+kind+data+struct.pack(">I", zlib.crc32(kind+data))
+    # Original procedural two-color gamer picture, not a downloaded asset.
+    return b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR", struct.pack(">2I5B", 2, 2, 8, 6, 0, 0, 0))+chunk(b"IDAT", zlib.compress(b"\x00"+b"\x33\x99\xee\xff"*2+b"\x00"+b"\xff\xcc\x33\xff"*2))+chunk(b"IEND", b"")
+
+
 def main():
     build = pathlib.Path(sys.argv[1]).resolve()
     client = os.environ.get("CNA_SERVICE_CLIENT_HARNESS")
+    c_client = os.environ.get("CNA_SERVICE_C_API_HARNESS")
     if client:
         assert pathlib.Path(client).is_file(), "missing CNA client harness"
     with tempfile.TemporaryDirectory(prefix="service-e2e-", dir=build) as temp:
@@ -37,18 +52,23 @@ def main():
         ca, key, db = root/"test-cert.pem", root/"test-key.pem", root/"service.sqlite3"
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", "-keyout", str(key), "-out", str(ca)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         admin = str(build/"cna-gamer-services-admin")
+        image = original_png(); image_path=root/"original.png"; image_path.write_bytes(image)
+        image_hash=hashlib.sha256(image).hexdigest()
         for game in ("one", "two"):
             subprocess.run([admin, str(db), "title", game, game], check=True, stdout=subprocess.DEVNULL)
-            definition = {"key": "first", "name": "First", "description": "Test award", "howToEarn": "Play", "score": 10}
+            imported=subprocess.check_output([admin,str(db),"asset",game,"image/png",str(image_path)],text=True).strip()
+            assert imported==image_hash
+            definition = {"picture": image_hash, "key": "first", "name": "First", "description": "Test award", "howToEarn": "Play", "score": 10}
             subprocess.run([admin, str(db), "achievement", game], input=json.dumps(definition), text=True, check=True)
         for user in ("alice", "bob"):
             subprocess.run([admin, str(db), "user", user, user.title()], input=user+"-password\n", text=True, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([admin,str(db),"picture",user,image_hash],check=True)
         server = None
         def run_cna(url, username, state, action, game="one", password=None, trust=None):
             environment = os.environ.copy()
             environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID=game,
                                CNA_GAMER_SERVICES_CA_BUNDLE=str(ca) if trust is None else trust,
-                               CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+                               CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"))
             environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
             subprocess.run([client, "--real", username, state, action],
                            input=(password or username+"-password")+"\n", text=True,
@@ -72,7 +92,9 @@ def main():
                 run_cna(url, "alice", "none", "reject", trust="")
                 run_cna(url.replace("localhost", "127.0.0.1"), "alice", "none", "reject")
                 run_cna(url, "alice", "none", "award")
+                cache_mtime=(root/"cache"/image_hash).stat().st_mtime_ns
                 run_cna(url, "bob", "none", "read")
+                assert (root/"cache"/image_hash).stat().st_mtime_ns==cache_mtime,"warm cross-process cache must avoid rewriting"
                 run_cna(url, "alice", "none", "read", game="two")
                 run_cna(url, "alice", "earned", "read")
             for user, action in (("alice", "award"), ("bob", "read")):
@@ -83,15 +105,19 @@ def main():
             if client:
                 run_cna(url, "alice", "earned", "read")
                 run_cna(url, "bob", "none", "read")
+                cached=root/"cache"/image_hash;assert cached.read_bytes()==image
+                cached.write_bytes(b"corrupt-cache")
+                run_cna(url,"alice","earned","read")
+                assert cached.read_bytes()==image, "corrupt immutable cache must be replaced"
                 run_cna(url, "alice", "earned", "request")
                 environment = os.environ.copy()
-                environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(ca), CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+                environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(ca), CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"))
                 environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
                 for user, action, ready in (("bob", "presence-wait", "READY_PRESENCE"), ("alice", "revoke-wait", "READY_REVOKE")):
                     process = subprocess.Popen([client, "--real", user, "none" if user=="bob" else "earned", action], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=environment)
                     try:
                         process.stdin.write(user+"-password\n");process.stdin.flush()
-                        assert process.stdout.readline().strip()==ready, "CNA coordination failed"
+                        assert line_with_timeout(process.stdout).strip()==ready, "CNA coordination failed"
                         if user=="bob": run_cna(url, "alice", "earned", "friends")
                         else: subprocess.run([admin, str(db), "revoke-user", "alice"], check=True)
                         process.stdin.write("continue\n");process.stdin.flush()
@@ -102,6 +128,12 @@ def main():
                         if process.poll() is None: process.kill();process.wait()
             if client:
                 token = request(url, str(ca), "one", "auth.login", {"username":"alice", "password":"alice-password"})["result"]["token"]
+            if c_client:
+                for user,state in (("alice","earned"),("bob","none")):
+                    environment=os.environ.copy()
+                    environment.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID="one",CNA_GAMER_SERVICES_CA_BUNDLE=str(ca),CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+                    environment.pop("DISPLAY",None);environment["WAYLAND_DISPLAY"]=""
+                    subprocess.run([c_client,user,state],input=user+"-password\n",text=True,env=environment,check=True,timeout=30)
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
             assert request(url, str(ca), "one", "auth.logout", token=token)["error"] == "OK"
@@ -110,7 +142,7 @@ def main():
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
-        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence and admin revocation")
+        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence, admin revocation, picture streams/cache and corrupt-cache recovery")
         print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, revocation, insecure public bind refusal")
 
 

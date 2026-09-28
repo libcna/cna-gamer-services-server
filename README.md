@@ -19,3 +19,20 @@ build/cna-gamer-services-server --database development.sqlite3 --insecure-loopba
 ```
 
 `inspect` prints user/title/session/earned counts only. `revoke-user <username>` revokes sessions. `reset-earned <title>` resets test achievement data. SQLite migrates transactionally on first open, keeps data on restart and refuses unknown schema versions. Back up the SQLite database using SQLite backup tooling before changing schema; never delete owner data to resolve version errors. Restrict DB/key files and run as an unprivileged service user. TLS tests use generated test CA/cert, never disabled certificate verification. No password/token request logging. See [canonical protocol](protocol/v1.md) for limits and exact operations and CNA's living implementation plan for unfinished acceptance items.
+
+Original asset provisioning (trusted administrator paths only):
+```
+build/cna-gamer-services-admin service.sqlite3 asset my-title image/png original-picture.png
+# prints content hash; include it as picture in achievement JSON
+build/cna-gamer-services-admin service.sqlite3 picture alice <hash>
+```
+SQLite schema 2 adds immutable assets/title associations and user pictures; schema 1 upgrades
+transactionally at open. Assets are PNG (<=512x512/512 KiB) or GLB v2 (<=16 MiB), header checked.
+Complete decode/asset-catalog validation remains future work. Network callers only supply hashes
+and bounded offsets, never filesystem paths. See protocol/v1.md for ACL/chunk limits.
+
+Cross-repository integration: set `CNA_SERVICE_CLIENT_HARNESS` to the built CNA client harness
+and run CTest. The test then includes two real CNA processes, standard Guide sign-in and social
+flows, rich presence, revocation, immutable picture streams/cache and server restart persistence.
+Without it, the TLS test still uses separate Python clients. Both are service/control tests, not
+Internet realtime multiplayer/relay evidence.

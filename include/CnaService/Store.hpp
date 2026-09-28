@@ -17,12 +17,16 @@ public:
     Statement& operator=(const Statement&) = delete;
     /** @brief Binds text. @param index One-based index. @param value Value. */
     void bind(int index, std::string_view value);
+    /** @brief Binds bounded binary content. @param index Index. @param value Bytes. */
+    void blob(int index, std::string_view value);
     /** @brief Binds an integer. @param index One-based index. @param value Value. */
     void bind(int index, long long value);
     /** @brief Advances. @return Whether a row exists. */
     bool row();
     /** @brief Reads text. @param index Zero-based column. @return Text. */
     std::string text(int index) const;
+    /** @brief Reads bounded binary content. @param index Column. @return Bytes. */
+    std::string blob(int index) const;
     /** @brief Reads an integer. @param index Zero-based column. @return Value. */
     long long number(int index) const;
 private:
@@ -48,6 +52,11 @@ public:
     std::string user(const std::string& username, const std::string& password, const std::string& gamertag);
     /** @brief Defines title achievement metadata. @param game Title. @param definition Metadata. */
     void achievement(const std::string& game, const Json& definition);
+    /** @brief Imports immutable content for a title. @param game Title. @param mime Type.
+     * @param bytes Content. @return SHA-256 identifier. */
+    std::string asset(const std::string& game,const std::string& mime,std::string_view bytes);
+    /** @brief Associates user picture. @param username Account. @param hash Existing asset hash. */
+    void picture(const std::string& username,const std::string& hash);
 private:
     sqlite3* db_ = nullptr;
 };
