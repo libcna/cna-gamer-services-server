@@ -55,9 +55,20 @@ int main() {
             for(auto pair:{std::pair{"one",bob},std::pair{"two",other}})
                 check(call(s,pair.first,"achievements.list",Json::object(),pair.second)["result"]["achievements"][0]["earnedTicks"]==0,"user/title earned isolation");
             check(call(s,"one","friends.add",{{"gamertag","Bob"}},alice)["error"]=="OK","friend add");
+            auto pending=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
+            check(pending.size()==1&&pending[0]["requestSent"]==true&&!pending[0]["accepted"].get<bool>()&&!pending[0]["online"].get<bool>(),"outgoing request privacy");
+            auto incoming=call(s,"one","friends.list",Json::object(),bob)["result"]["friends"];
+            check(incoming.size()==1&&incoming[0]["requestReceived"]==true,"incoming request");
+            check(call(s,"one","friends.accept",{{"gamertag","Alice"}},bob)["error"]=="OK","mutual accept");
             check(call(s,"one","presence.set",{{"mode",1},{"text","Playing"}},bob)["error"]=="OK","presence");
             auto friends=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
             check(friends.size()==1&&friends[0]["online"]==true&&friends[0]["presenceText"]=="Playing","friend presence");
+            check(friends[0]["accepted"]==true&&!friends[0]["requestSent"].get<bool>(),"accepted flags");
+            check(call(s,"two","friends.list",Json::object(),other)["result"]["friends"][0]["presenceText"]=="","title presence isolation");
+            check(call(s,"one","friends.remove",{{"gamertag","Alice"}},bob)["error"]=="OK","mutual removal");
+            check(call(s,"one","friends.list",Json::object(),alice)["result"]["friends"].empty(),"removed both directions");
+            check(call(s,"one","friends.accept",{{"gamertag","Bob"}},alice)["error"]=="INVALID_STATE","accept without request");
+            check(call(s,"one","friends.add",{{"gamertag","Alice"}},alice)["error"]=="INVALID_ARGUMENT","self request");
             check(call(s,"one","profile.get",{{"gamertag","Alice"}},bob)["result"]["gamerScore"]==10,"profile aggregate");
             check(call(s,"one","gamer.lookup",{{"gamertag","absent"}},alice)["error"]=="NOT_FOUND","lookup absent");
         }

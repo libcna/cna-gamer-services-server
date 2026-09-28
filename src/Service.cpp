@@ -27,9 +27,9 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","presence.set","achievements.list","achievements.award"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","presence","achievements"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","friends","friend-requests","presence","achievements"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
@@ -86,17 +86,41 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         Statement s(store_.db(),"INSERT INTO presence(user_id,game_id,mode,text) VALUES(?,?,?,?) ON CONFLICT(user_id,game_id) DO UPDATE SET mode=excluded.mode,text=excluded.text");
         s.bind(1,user);s.bind(2,game);s.bind(3,a["mode"].get<long long>());s.bind(4,stringField(a,"text",256));(void)s.row();return Json::object();
     }
-    if (op=="friends.add" || op=="friends.remove") {
+    if (op=="friends.add" || op=="friends.remove" || op=="friends.accept") {
         Statement target(store_.db(),"SELECT id FROM users WHERE gamertag=?");target.bind(1,stringField(a,"gamertag",32));
         if (!target.row()) throw Error("NOT_FOUND");
         if (target.text(0)==user) throw Error("INVALID_ARGUMENT");
-        Statement s(store_.db(),op=="friends.add"?"INSERT OR IGNORE INTO friends(user_id,friend_id) VALUES(?,?)":"DELETE FROM friends WHERE user_id=? AND friend_id=?");
-        s.bind(1,user);s.bind(2,target.text(0));(void)s.row();return Json::object();
+        const auto friendId=target.text(0);
+        if(op=="friends.accept") {
+            Statement incoming(store_.db(),"SELECT 1 FROM friends WHERE user_id=? AND friend_id=?");
+            incoming.bind(1,friendId);incoming.bind(2,user);if(!incoming.row())throw Error("INVALID_STATE");
+        }
+        if(op!="friends.remove") {
+            Statement existing(store_.db(),"SELECT 1 FROM friends WHERE user_id=? AND friend_id=?");
+            existing.bind(1,user);existing.bind(2,friendId);
+            if(!existing.row())for(const auto& account:{user,friendId}) {
+                Statement cap(store_.db(),"SELECT COUNT(*) FROM friends WHERE user_id=? OR friend_id=?");
+                cap.bind(1,account);cap.bind(2,account);(void)cap.row();if(cap.number(0)>=256)throw Error("LIMIT_EXCEEDED");
+            }
+        }
+        Statement s(store_.db(),op=="friends.remove"?
+            "DELETE FROM friends WHERE (user_id=? AND friend_id=?) OR (user_id=? AND friend_id=?)":
+            "INSERT OR IGNORE INTO friends(user_id,friend_id) VALUES(?,?)");
+        s.bind(1,user);s.bind(2,friendId);
+        if(op=="friends.remove"){s.bind(3,friendId);s.bind(4,user);}
+        (void)s.row();return Json::object();
     }
     if (op=="friends.list") {
-        Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,'') FROM friends f JOIN users u ON u.id=f.friend_id LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE f.user_id=? ORDER BY u.gamertag LIMIT 257");
-        s.bind(1,timestamp);s.bind(2,timestamp-90);s.bind(3,game);s.bind(4,user);Json friends=Json::array();
-        while(s.row()) { if(friends.size()>=256)throw Error("LIMIT_EXCEEDED");friends.push_back(Json{{"userId",s.text(0)},{"gamertag",s.text(1)},{"online",s.number(2)!=0},{"presenceMode",s.number(3)},{"presenceText",s.text(4)}}); }
+        Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,''),EXISTS(SELECT 1 FROM friends f WHERE f.user_id=? AND f.friend_id=u.id),EXISTS(SELECT 1 FROM friends f WHERE f.friend_id=? AND f.user_id=u.id) FROM users u LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE u.id IN (SELECT friend_id FROM friends WHERE user_id=? UNION SELECT user_id FROM friends WHERE friend_id=?) ORDER BY u.gamertag LIMIT 257");
+        s.bind(1,timestamp);s.bind(2,timestamp-90);s.bind(3,user);s.bind(4,user);s.bind(5,game);s.bind(6,user);s.bind(7,user);
+        Json friends=Json::array();
+        while(s.row()) {
+            if(friends.size()>=256)throw Error("LIMIT_EXCEEDED");
+            const bool accepted=s.number(5)&&s.number(6), online=accepted&&s.number(2);
+            friends.push_back(Json{{"userId",s.text(0)},{"gamertag",s.text(1)},{"online",online},
+                {"presenceMode",online?s.number(3):0},{"presenceText",online?s.text(4):""},
+                {"accepted",accepted},{"requestSent",!accepted&&s.number(5)!=0},{"requestReceived",!accepted&&s.number(6)!=0}});
+        }
         return Json{{"friends",friends}};
     }
     if (op=="achievements.award") {

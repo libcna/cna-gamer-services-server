@@ -83,6 +83,25 @@ def main():
             if client:
                 run_cna(url, "alice", "earned", "read")
                 run_cna(url, "bob", "none", "read")
+                run_cna(url, "alice", "earned", "request")
+                environment = os.environ.copy()
+                environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(ca), CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
+                environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
+                for user, action, ready in (("bob", "presence-wait", "READY_PRESENCE"), ("alice", "revoke-wait", "READY_REVOKE")):
+                    process = subprocess.Popen([client, "--real", user, "none" if user=="bob" else "earned", action], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=environment)
+                    try:
+                        process.stdin.write(user+"-password\n");process.stdin.flush()
+                        assert process.stdout.readline().strip()==ready, "CNA coordination failed"
+                        if user=="bob": run_cna(url, "alice", "earned", "friends")
+                        else: subprocess.run([admin, str(db), "revoke-user", "alice"], check=True)
+                        process.stdin.write("continue\n");process.stdin.flush()
+                        output, _ = process.communicate(timeout=30)
+                        assert process.returncode==0, "CNA coordinated client failed"
+                        print(output.strip())
+                    finally:
+                        if process.poll() is None: process.kill();process.wait()
+            if client:
+                token = request(url, str(ca), "one", "auth.login", {"username":"alice", "password":"alice-password"})["result"]["token"]
             earned = request(url, str(ca), "one", "achievements.list", token=token)["result"]["achievements"]
             assert earned[0]["earnedTicks"] > 0
             assert request(url, str(ca), "one", "auth.logout", token=token)["error"] == "OK"
@@ -91,7 +110,7 @@ def main():
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert refused.returncode != 0
-        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out")
+        if client: print("CNA E2E passed: Guide authentication and masking, rejected password/CA/hostname, two users/processes/titles, async completion, idempotent award, client/server restart persistence, lookup/profile, sign-out, mutual friends/rich presence and admin revocation")
         print("TLS E2E passed: trusted TLS, untrusted CA, wrong hostname, two client processes, title isolation, restart persistence, revocation, insecure public bind refusal")
 
 
