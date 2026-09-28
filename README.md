@@ -123,3 +123,12 @@ CNA_SERVICE_C_API_HARNESS=<pure C probe> CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=<d
 ctest --test-dir build --output-on-failure`: **5/5 passed in 75.37s**. Unit 5,216 assertions;
 directory 99; invitation 153; general TLS E2E 59.24s; two-CNA control E2E 6.85s
 (31 join/16 host checks per directory category). No server production code changed in this step.
+
+GS-008a1 adds the canonical independent binary realtime envelope, specification and golden vectors:
+[relay protocol](protocol/relay-v1.md). Bounded zero-copy parsing covers ENet's 4,096-byte maximum
+MTU and rejects unknown version/type/reserved bytes, empty/oversize payloads and invalid machines.
+Server relay protocol test passes **10,027 assertions**, including 10,000 deterministic mutations.
+Service/directory/invitation/relay unit gate **4/4 passed in 7.52s**, clean `-Werror` build.
+CNA independently runs the same golden corpus and a mutation suite and checks exact source drift.
+This slice does not implement a WebSocket endpoint, authentication tickets or forwarding, does not
+advertise relay capability and does not prove Internet multiplayer. Those are immediate next tasks.
