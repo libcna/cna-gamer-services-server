@@ -33,7 +33,10 @@ private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 16;
+inline constexpr long long SchemaVersion = 17;
+/** @brief Checks game defaults (XNA GameDefaults): an object of at most the known keys, each with a
+ * value of its kind. @param value Candidate. @throws Error INVALID_ARGUMENT otherwise. */
+void validateGameDefaults(const Json& value);
 /** @brief Persistent service database with transactional versioned migration. */
 class Store {
 public:
@@ -59,6 +62,8 @@ public:
     std::string asset(const std::string& game,const std::string& mime,std::string_view bytes);
     /** @brief Associates user picture. @param username Account. @param hash Existing asset hash. */
     void picture(const std::string& username,const std::string& hash);
+    /** @brief Replaces an account's game defaults. @param username Account. @param value Valid defaults. */
+    void gameDefaults(const std::string& username,const Json& value);
     /** @brief Defines immutable leaderboard policy. @param game Title. @param definition Policy. */
     void leaderboard(const std::string& game,const Json& definition);
     /** @brief Seeds development data through trusted administration. @param game Title.

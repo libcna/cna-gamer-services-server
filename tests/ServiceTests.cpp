@@ -124,6 +124,18 @@ int main() {
             check(call(s,"one","presence.status",{{"status","online"}},bob)["error"]=="OK","status online");
             friends=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
             check(friends[0]["away"]==false&&friends[0]["busy"]==false,"friend online again");
+            // XNA GameDefaults for accounts: the caller's own, account-wide, validated as a local profile's.
+            check(call(s,"one","profile.gameDefaults",Json::object(),alice)["result"]["gameDefaults"]==Json::object(),"no game defaults yet");
+            Json defaults{{"gameDifficulty","Hard"},{"invertYAxis",true},{"primaryColor","#12ab34"},{"racingCameraAngle","Inside"}};
+            check(call(s,"one","profile.setGameDefaults",{{"gameDefaults",defaults}},alice)["result"]["gameDefaults"]==defaults,"set game defaults");
+            check(call(s,"two","profile.gameDefaults",Json::object(),other)["result"]["gameDefaults"]==defaults,"game defaults are account-wide");
+            check(call(s,"one","profile.gameDefaults",Json::object(),bob)["result"]["gameDefaults"]==Json::object(),"each account its own");
+            for(const auto& bad:{Json{{"gameDifficulty","Insane"}},Json{{"invertYAxis","yes"}},Json{{"primaryColor","red"}},
+                Json{{"volume",3}},Json::array()})
+                check(call(s,"one","profile.setGameDefaults",{{"gameDefaults",bad}},alice)["error"]=="INVALID_ARGUMENT","invalid game defaults");
+            check(call(s,"one","profile.gameDefaults",{{"user","bob"}},alice)["error"]=="INVALID_ARGUMENT","only one's own");
+            {Store admin(path.string());admin.gameDefaults("bob",Json{{"autoAim",true}});}
+            check(call(s,"one","profile.gameDefaults",Json::object(),bob)["result"]["gameDefaults"]==Json{{"autoAim",true}},"administration sets them too");
             check(call(s,"two","friends.list",Json::object(),other)["result"]["friends"][0]["presenceText"]=="","title presence isolation");
             check(call(s,"one","friends.remove",{{"gamertag","Alice"}},bob)["error"]=="OK","mutual removal");
             check(call(s,"one","friends.list",Json::object(),alice)["result"]["friends"].empty(),"removed both directions");
@@ -221,7 +233,7 @@ int main() {
             for(int i=0;i<6;++i)check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="UNAUTHENTICATED","refresh throttle threshold");
             check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="RATE_LIMITED","refresh source rate limit");
         }
-        {Store db(path.string());db.exec("ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
+        {Store db(path.string());db.exec("ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==SchemaVersion,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
         {Store db(path.string());db.exec(("PRAGMA user_version="+std::to_string(SchemaVersion+1)).c_str());}
         bool refused=false;try{Store future(path.string());}catch(const Error& e){refused=e.code()=="UNSUPPORTED_DATABASE_VERSION";}

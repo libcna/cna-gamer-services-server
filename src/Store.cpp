@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Store.hpp"
+#include <algorithm>
+#include <map>
+#include <set>
+#include <vector>
 #include "InitialMigration.hpp"
 #include "AssetMigration.hpp"
 #include "LeaderboardMigration.hpp"
@@ -15,6 +19,7 @@
 #include "AvatarFeatureMigration.hpp"
 #include "PresenceStatusMigration.hpp"
 #include "HostMigrationMigration.hpp"
+#include "GameDefaultsMigration.hpp"
 #include "SessionRemovalMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -119,9 +124,35 @@ Store::Store(const std::string& path) {
         if(current<14){exec("BEGIN IMMEDIATE");exec(AvatarFeatureMigration);exec("COMMIT");}
         if(current<15){exec("BEGIN IMMEDIATE");exec(PresenceStatusMigration);exec("COMMIT");}
         if(current<16){exec("BEGIN IMMEDIATE");exec(HostMigrationMigration);exec("COMMIT");}
+        if(current<17){exec("BEGIN IMMEDIATE");exec(GameDefaultsMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }
+void validateGameDefaults(const Json& value) {
+    if(!value.is_object()||value.size()>12)throw Error("INVALID_ARGUMENT");
+    static const std::map<std::string,std::vector<std::string>> choices{{"gameDifficulty",{"Easy","Normal","Hard"}},
+        {"controllerSensitivity",{"Low","Medium","High"}},{"racingCameraAngle",{"Back","Front","Inside"}}};
+    static const std::set<std::string> switches{"autoAim","autoCenter","moveWithRightThumbStick","invertYAxis",
+        "manualTransmission","accelerateWithButtons","brakeWithButtons"};
+    for(const auto& [key,item]:value.items()) {
+        if(const auto choice=choices.find(key);choice!=choices.end()) {
+            if(!item.is_string()||std::find(choice->second.begin(),choice->second.end(),item.get<std::string>())==choice->second.end())
+                throw Error("INVALID_ARGUMENT");
+        } else if(switches.contains(key)) {
+            if(!item.is_boolean())throw Error("INVALID_ARGUMENT");
+        } else if(key=="primaryColor"||key=="secondaryColor") {
+            // "#rrggbb"
+            if(!item.is_string())throw Error("INVALID_ARGUMENT");
+            const auto& text=item.get_ref<const std::string&>();
+            if(text.size()!=7||text[0]!='#'||text.find_first_not_of("0123456789abcdefABCDEF",1)!=std::string::npos)throw Error("INVALID_ARGUMENT");
+        } else throw Error("INVALID_ARGUMENT");
+    }
+}
+void Store::gameDefaults(const std::string& username,const Json& value) {
+    validateGameDefaults(value);
+    Statement s(db_,"UPDATE users SET game_defaults=? WHERE username=?");s.bind(1,value.dump());s.bind(2,username);(void)s.row();
+    if(sqlite3_changes(db_)==0)throw Error("NOT_FOUND");
+}
 sqlite3* Store::db() const { return db_; }
 void Store::exec(const char* sql) {
     if (sqlite3_exec(db_,sql,nullptr,nullptr,nullptr)!=SQLITE_OK) throw Error("INTERNAL_ERROR");

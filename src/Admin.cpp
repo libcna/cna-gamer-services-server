@@ -63,6 +63,10 @@ int main(int argc,char** argv) {
                 if(body&&*body<0)throw CnaService::Error("INVALID_ARGUMENT");
                 CnaService::setAvatar(store,argv[3],CnaService::randomAvatarDescription(store.db(),body));
             } else throw CnaService::Error("INVALID_ARGUMENT");
+        } else if(command=="game-defaults"&&argc==4) {
+            // game-defaults <username>, the defaults object as JSON on stdin (as a local profile's).
+            std::string text((std::istreambuf_iterator<char>(std::cin)),{});
+            store.gameDefaults(argv[3],CnaService::parse(text));
         } else if(command=="inspect"&&argc==3) {
             for(const auto* sql:{"SELECT COUNT(*) FROM users","SELECT COUNT(*) FROM titles","SELECT COUNT(*) FROM sessions","SELECT COUNT(*) FROM earned"}) {
                 CnaService::Statement s(store.db(),sql);(void)s.row();std::cout<<s.number(0)<<'\n';

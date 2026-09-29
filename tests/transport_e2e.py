@@ -105,6 +105,8 @@ def main():
         for user in ("alice", "bob", "charlie", "dana"):
             subprocess.run([admin, str(db), "user", user, user.title()], input=user+"-password\n", text=True, check=True, stdout=subprocess.DEVNULL)
             subprocess.run([admin,str(db),"picture",user,image_hash],check=True)
+        # GSP-L1: account game defaults, read by CNA at sign-in.
+        subprocess.run([admin,str(db),"game-defaults","alice"],input=json.dumps({"gameDifficulty":"Hard","invertYAxis":True}),text=True,check=True)
         for game in ("one","two"):
             definition={"key":"BestScoreLifeTime","mode":0,"ascending":False,"aggregation":"best","arbitrated":False,"columns":{"Rounds":"int32","Label":"string","Total":"int64","Scale":"single","Precision":"double","When":"datetime","Duration":"timespan","Outcome":"outcome"}}
             subprocess.run([admin,str(db),"leaderboard",game],input=json.dumps(definition),text=True,check=True)
