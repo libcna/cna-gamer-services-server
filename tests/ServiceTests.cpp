@@ -55,6 +55,14 @@ int main() {
             bool refused=false;try{validateColumns({{"Rounds",{{"type","int64"},{"value",3}}}},board["columns"]);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}check(refused,"board column type");
             refused=false;try{validateColumns({{"Rounds",{{"type","int32"},{"value",2147483648LL}}}},board["columns"]);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}check(refused,"board column range");
             refused=false;try{validateColumns({{"unknown",{{"type","int32"},{"value",0}}}},board["columns"]);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}check(refused,"board undefined column");
+            // XNA Stream columns: up to 256 bytes as lowercase hex.
+            const Json streams{{"Ghost","stream"}};
+            validateColumns({{"Ghost",{{"type","stream"},{"value","00ff10"}}}},streams);check(true,"stream column");
+            validateColumns({{"Ghost",{{"type","stream"},{"value",std::string(512,'a')}}}},streams);check(true,"256-byte stream column");
+            for(const auto& bad:{Json("0"),Json("0G"),Json("00FF"),Json(std::string(514,'a')),Json(7)}) {
+                refused=false;try{validateColumns({{"Ghost",{{"type","stream"},{"value",bad}}}},streams);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}
+                check(refused,"invalid stream column");
+            }
         }
         std::string alice,bob,other;
         const std::string assetBytes="glTF"+std::string("\x02\0\0\0\x0c\0\0\0",8);

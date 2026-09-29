@@ -14,7 +14,9 @@ long long integerField(const Json& object,const char* key,long long minimum,long
 }
 namespace {
 constexpr long long MaximumTicks=3155378975999999999LL;
-const std::set<std::string> Types{"int32","int64","single","double","string","datetime","timespan","outcome"};
+const std::set<std::string> Types{"int32","int64","single","double","string","datetime","timespan","outcome","stream"};
+// XNA's Stream columns (PropertyDictionary.GetValueStream): at most this many bytes, as lowercase hex.
+constexpr std::size_t MaxStreamBytes=256;
 void schemaGuard(const Json& schema) {
     if(!schema.is_object()||schema.size()>32)throw Error("INVALID_ARGUMENT");
     for(const auto& [name,type]:schema.items())if(!identifier(name)||name.size()>64||!type.is_string()||!Types.contains(type.get<std::string>()))throw Error("INVALID_ARGUMENT");
@@ -27,6 +29,11 @@ void validateColumns(const Json& columns,const Json& schema) {
         if(!schema.contains(name)||!field.is_object()||field.size()!=2||!field.contains("type")||field["type"]!=schema[name]||!field.contains("value"))throw Error("INVALID_ARGUMENT");
         const auto type=field["type"].get<std::string>();
         if(type=="string"){(void)stringField(field,"value",256);continue;}
+        if(type=="stream") {
+            const auto hex=stringField(field,"value",MaxStreamBytes*2);
+            if(hex.size()%2||hex.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
+            continue;
+        }
         if(type=="single"||type=="double") {
             if(!field["value"].is_number())throw Error("INVALID_ARGUMENT");
             const auto value=field["value"].get<double>();if(!std::isfinite(value)||(type=="single"&&std::abs(value)>std::numeric_limits<float>::max()))throw Error("INVALID_ARGUMENT");
