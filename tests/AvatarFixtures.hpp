@@ -115,7 +115,8 @@ inline void finish(GlbParts& g)
 
 /** A face atlas PNG header (1024 x 320) and a layout naming every expression state. */
 inline std::string atlasPng() {
-    return std::string("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x04\x00\x00\x00\x01\x40\x08\x06\x00\x00\x00",33);
+    // Signature and a whole IHDR chunk (1024 x 320, RGBA), its CRC included.
+    return std::string("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x04\x00\x00\x00\x01\x40\x08\x06\x00\x00\x00\x22\x7d\x0e\x48",33);
 }
 inline Json atlasLayout() {
     Json eyes=Json::object(), brows=Json::object(), mouths=Json::object();
