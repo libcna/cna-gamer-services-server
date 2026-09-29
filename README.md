@@ -84,7 +84,7 @@ server and never prints a credential. Passwords and JSON documents come from std
 **Files.** One SQLite database in WAL mode (`service.sqlite3`, `-wal`, `-shm`) plus the TLS key.
 Restrict both to the unprivileged service user. Back up with SQLite's online backup
 (`sqlite3 service.sqlite3 ".backup backup.sqlite3"`), never by copying the file while it runs.
-Opening a database migrates it transactionally to the current schema (18); a newer schema is
+Opening a database migrates it transactionally to the current schema (20); a newer schema is
 refused and nothing is deleted to resolve it. Back up before upgrading the server.
 
 **TLS.** TLS 1.2 or newer with the given chain and key; clients verify chain and hostname. A new
@@ -108,11 +108,11 @@ refresh family is signed out. The server raises its descriptor limit to what the
 **Monitoring.** One line a minute on stdout, never with a credential, address or request body:
 
 ```
-stats AUTHENTICATION_FAILED=1 OK=5412 RATE_LIMITED=3 refused=0 control=41 relays=12
+stats AUTHENTICATION_FAILED=1 OK=5412 RATE_LIMITED=3 refused=0 control=41 relays=12 events=37
 ```
 
 It gives response counts per error code since the previous line, connections refused by admission,
-open control connections and attached relay machines. `INTERNAL_ERROR` means storage failed (disk
+open control connections, attached relay machines and open event channels. `INTERNAL_ERROR` means storage failed (disk
 full, a locked database); the response to the client never carries details. SIGINT and SIGTERM
 stop the server.
 
@@ -124,6 +124,32 @@ SQLite's online backup, which is consistent under WAL: `sqlite3 service.sqlite3 
 service-backup.sqlite3"`. One address may hold 32 control connections and open 600 new ones a
 minute (each costs a TLS handshake); put a firewall or proxy in front of the server against floods
 from many addresses.
+
+## Before exposing it on the public internet
+
+The server is built to face untrusted clients, but a public deployment still needs these, in order:
+
+1. **An account of its own.** Run it as an unprivileged user that owns only the database directory
+   and the TLS key (mode 0600); under systemd, `NoNewPrivileges=yes`, `ProtectSystem=strict`,
+   `ReadWritePaths=` the database directory, `Restart=on-failure`.
+2. **A public certificate** for the DNS name the games use, with its intermediates in the chain file.
+   Clients verify the chain and the hostname against the system trust store (or the CA bundle a
+   title ships). A renewed certificate needs a restart: schedule it; clients and relays reconnect.
+3. **One open port.** Control requests, the relay and the event channel share the TLS port. The
+   server terminates TLS itself: put an L4 (TCP) filter in front, not a TLS-terminating proxy, which
+   would also make every player appear to come from the proxy's address and share its per-address
+   limits.
+4. **Flood protection in front.** Per-address limits stop one address (32 connections, 600 new ones
+   and 10 sign-ins a minute); floods from many addresses need a firewall or DDoS filter upstream.
+5. **Titles and accounts.** Create each title (`title`), import its achievements, leaderboards and
+   avatar catalogs, and set `title-minimum-version` when old game builds must update. Accounts are
+   created by the operator (`user`); there is no self-registration and no password reset by mail.
+6. **Backups** with SQLite's online backup on a schedule, a restore tried once, and a backup taken
+   before every upgrade (migrations only go forward).
+7. **Monitoring** of the per-minute statistics line: alert on `INTERNAL_ERROR`, on `refused` rising
+   and on `RATE_LIMITED` bursts.
+8. **Capacity.** One process, one machine (see below): about 1,300 requests a second on the reference
+   machine, while an idle player costs about two a minute.
 
 ## Capacity
 
@@ -178,7 +204,7 @@ derivation.
 | Floods from many addresses can still fill the 256 control connections; no handshake rate limit | Retained: needs a firewall or proxy in front |
 | The per-account request budget lives in memory and starts over when the server restarts | Retained |
 | A new TLS certificate needs a restart (clients and relays reconnect) | Retained |
-| Clients poll; there is no push | Retained |
+| Clients poll; there is no push | Fixed `e3e78a8`: an account event channel sends hints, clients still poll as the fallback |
 | Players behind one NAT address share its 32 control connections and its 10 sign-ins a minute (a LAN party signing in at once waits) | Retained: per-address limits are the flood protection; keep-alive idles only 5 s |
 
 ## Tests
