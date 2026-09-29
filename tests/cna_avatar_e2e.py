@@ -93,6 +93,8 @@ def main():
                 assert lines.get("avatar-lookup", "").startswith("valid=1 body=0 "), lines
                 assert lines.get("avatar-none") == "valid=0 body=0 height=0 catalog=0", lines
                 assert lines.get("avatar-ready") == "substituted=0", lines
+                # The avatar editor's save: an edit on the newest catalog, stored and read back.
+                assert lines.get("avatar-edit") == "saved=1 format=2", lines
                 # Only the item missing from CNA's embedded catalog came over the wire, verified and cached.
                 cached = sorted(p.name for p in cache.iterdir()) if cache.is_dir() else []
                 assert cached == [crown["male"]], cached
@@ -100,7 +102,8 @@ def main():
         finally:
             server.terminate(); server.wait(timeout=10); server.stdout.close()
     print("Standard XNA avatars over the CNA service: every CNA catalog imported; a format 2 avatar on catalog v%d; "
-          "own/looked-up/absent descriptions; the one missing item fetched by hash, cached, rendered Ready." % target)
+          "own/looked-up/absent descriptions; the one missing item fetched by hash, cached, rendered Ready; "
+          "an editor save stored through avatars.set." % target)
     return 0
 
 
