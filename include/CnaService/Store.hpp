@@ -33,7 +33,7 @@ private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 18;
+inline constexpr long long SchemaVersion = 19;
 /** @brief Checks game defaults (XNA GameDefaults): an object of at most the known keys, each with a
  * value of its kind. @param value Candidate. @throws Error INVALID_ARGUMENT otherwise. */
 void validateGameDefaults(const Json& value);
@@ -52,6 +52,8 @@ public:
     void exec(const char* sql);
     /** @brief Provisions a title. @param id Stable title ID. @param name Display name. */
     void title(const std::string& id, const std::string& name);
+    /** @brief Sets the oldest game version a title accepts (empty: any). @param id Title. @param version Dotted version. */
+    void titleMinimumVersion(const std::string& id, const std::string& version);
     /** @brief Provisions a user. @param username Login. @param password Password.
      * @param gamertag Public name. @return User identifier. */
     std::string user(const std::string& username, const std::string& password, const std::string& gamertag);

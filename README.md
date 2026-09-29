@@ -63,6 +63,7 @@ server and never prints a credential. Passwords and JSON documents come from std
 | Command | Effect |
 |---|---|
 | `title <id> <name>` | Registers a title; clients name it in every request |
+| `title-minimum-version <id> <version>` | The oldest game version the title accepts (`1.2.0`; empty accepts every version): older clients, and clients that state none, get `UPDATE_REQUIRED` (XNA `GameUpdateRequiredException`) |
 | `user <username> <gamertag>` | Creates an account; password on stdin (use a secret input, shell tracing off) |
 | `achievement <title>` | Adds an achievement from JSON on stdin (`key`, `name`, `description`, `howToEarn`, `score`, optional `picture` hash) |
 | `leaderboard <title>` / `seed-leaderboard <title>` | Defines a board / inserts a fixture row, JSON on stdin |
@@ -219,6 +220,7 @@ Import each catalog CNA ships, then give accounts avatars:
 ```sh
 build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v1
 build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v2
+build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v3
 build/cna-gamer-services-admin service.sqlite3 avatar alice random male
 ```
 

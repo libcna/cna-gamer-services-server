@@ -120,9 +120,15 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     const auto& a=r["args"];
     static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
-    Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    Statement title(store_.db(),"SELECT id,minimum_version FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
+    // A title may stop accepting old game versions (XNA GameUpdateRequiredException); a client that
+    // states no version is as old as can be.
+    if (const auto minimum=title.text(1);!minimum.empty()) {
+        const auto version=r.contains("titleVersion")?stringField(r,"titleVersion",32):std::string{};
+        if (version.empty()||compareVersions(version,minimum)<0) throw Error("UPDATE_REQUIRED");
+    }
     std::string user,token;
     const auto timestamp=now();
     if (op!="auth.login"&&op!="auth.refresh") {

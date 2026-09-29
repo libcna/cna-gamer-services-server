@@ -72,6 +72,22 @@ int main() {
         {
             Service s(path.string());
             check(call(s,"missing","hello")["error"]=="OK","hello");
+            {
+                // A title's oldest accepted version: older clients and clients stating none are refused.
+                check(validVersion("1.2.10")&&!validVersion("1..2")&&!validVersion("1.2.3.4.5")&&!validVersion("v1")&&!validVersion(""),"version syntax");
+                check(compareVersions("1.2.10","1.2.9")>0&&compareVersions("1.2","1.2.0")==0&&compareVersions("0.9","1")<0,"version order");
+                {Store db(path.string());db.titleMinimumVersion("two","1.4");}
+                Json request{{"v",1},{"id","version-1"},{"game","two"},{"op","auth.login"},{"args",{{"username","alice"},{"password","alice-password"}}}};
+                check(parse(s.handle(request.dump(),"version-peer"))["error"]=="UPDATE_REQUIRED","no version stated");
+                request["id"]="version-2";request["titleVersion"]="1.3.9";
+                check(parse(s.handle(request.dump(),"version-peer"))["error"]=="UPDATE_REQUIRED","older version");
+                request["id"]="version-3";request["titleVersion"]="1.4";
+                check(parse(s.handle(request.dump(),"version-peer"))["error"]=="OK","current version");
+                request["id"]="version-4";request["titleVersion"]="1.x";
+                check(parse(s.handle(request.dump(),"version-peer"))["error"]=="INVALID_ARGUMENT","malformed version");
+                check(call(s,"two","hello")["error"]=="OK","hello needs no version");
+                {Store db(path.string());db.titleMinimumVersion("two","");}
+            }
             check(call(s,"one","unknown")["error"]=="UNKNOWN_OPERATION","unknown op");
             check(call(s,"missing","auth.login",{{"username","alice"},{"password","alice-password"}})["error"]=="UNKNOWN_TITLE","title");
             check(call(s,"one","auth.login",{{"username","alice"},{"password","wrong-password"}})["error"]=="AUTHENTICATION_FAILED","bad password");
@@ -285,7 +301,7 @@ int main() {
             check(call(s,"two","sessions.leave",leave,bystander)["error"]!="RATE_LIMITED","other accounts keep the title's budget");
             check(call(s,"two","auth.ping",Json::object(),spender)["error"]=="OK","unrecorded requests are outside the budget");
         }
-        {Store db(path.string());db.exec("ALTER TABLE users DROP COLUMN gamer_zone; ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
+        {Store db(path.string());db.exec("ALTER TABLE titles DROP COLUMN minimum_version; ALTER TABLE users DROP COLUMN gamer_zone; ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==SchemaVersion,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
         {Store db(path.string());db.exec(("PRAGMA user_version="+std::to_string(SchemaVersion+1)).c_str());}
         bool refused=false;try{Store future(path.string());}catch(const Error& e){refused=e.code()=="UNSUPPORTED_DATABASE_VERSION";}

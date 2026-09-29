@@ -115,8 +115,10 @@ def main():
             subprocess.run([admin,str(db),"seed-leaderboard","one"],input=json.dumps(entry),text=True,check=True)
         server = None
         main_refresh = None
-        def run_cna(url, username, state, action, game="one", password=None, trust=None, credentials=None):
+        def run_cna(url, username, state, action, game="one", password=None, trust=None, credentials=None, version=None):
             environment = os.environ.copy()
+            environment.pop("CNA_GAME_VERSION", None)
+            if version: environment["CNA_GAME_VERSION"] = version
             environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID=game,
                                CNA_GAMER_SERVICES_CA_BUNDLE=str(ca) if trust is None else trust,
                                CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_CREDENTIALS_DIR="0")
@@ -143,6 +145,11 @@ def main():
                 run_cna(url, "alice", "none", "reject", password="wrong-password")
                 run_cna(url, "alice", "none", "reject", trust="")
                 run_cna(url.replace("localhost", "127.0.0.1"), "alice", "none", "reject")
+                # GSX-E4: a title that no longer accepts a game version refuses it, and the player is told why.
+                subprocess.run([admin, str(db), "title-minimum-version", "two", "2.0"], check=True)
+                run_cna(url, "alice", "none", "update-required", game="two", version="1.9")
+                run_cna(url, "alice", "none", "update-required", game="two")
+                subprocess.run([admin, str(db), "title-minimum-version", "two", ""], check=True)
                 run_cna(url, "alice", "none", "award")
                 # A write is a temporary renamed into place (a new inode); a read may only refresh
                 # the entry's use time, which the client's least-recently-used eviction relies on.

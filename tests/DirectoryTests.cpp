@@ -112,8 +112,9 @@ int main() {
         {Store admin(path.string());admin.exec("ALTER TABLE users DROP COLUMN gamer_zone; ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
         check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"legacy ranked flag cannot expose gameplay");
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","legacy ranked flag cannot allow gameplay join");
-        // A real schema 8 database has no allow_migration either; the running service above still needed it.
-        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK&&sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration",nullptr,nullptr,nullptr)==SQLITE_OK,"legacy schema without host migration");sqlite3_close(raw);}
+        // A real schema 8 database has no allow_migration or title minimum version either; the running
+        // service above still needed them.
+        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK&&sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration; ALTER TABLE titles DROP COLUMN minimum_version",nullptr,nullptr,nullptr)==SQLITE_OK,"legacy schema without host migration");sqlite3_close(raw);}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==SchemaVersion,"ranked policy schema upgrade");}
         auto migrated=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];
         check(migrated["allowJoinInProgress"]==false&&migrated["revision"]==priorRevision+1,"migration repairs flag and revision");

@@ -22,6 +22,7 @@
 #include "GameDefaultsMigration.hpp"
 #include "GamerZoneMigration.hpp"
 #include "SessionRemovalMigration.hpp"
+#include "TitleVersionMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -127,6 +128,7 @@ Store::Store(const std::string& path) {
         if(current<16){exec("BEGIN IMMEDIATE");exec(HostMigrationMigration);exec("COMMIT");}
         if(current<17){exec("BEGIN IMMEDIATE");exec(GameDefaultsMigration);exec("COMMIT");}
         if(current<18){exec("BEGIN IMMEDIATE");exec(GamerZoneMigration);exec("COMMIT");}
+        if(current<19){exec("BEGIN IMMEDIATE");exec(TitleVersionMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }
@@ -162,6 +164,11 @@ void Store::exec(const char* sql) {
 void Store::title(const std::string& id,const std::string& name) {
     if (!identifier(id) || name.empty() || name.size()>128) throw Error("INVALID_ARGUMENT");
     Statement s(db_,"INSERT INTO titles(id,name) VALUES(?,?)"); s.bind(1,id);s.bind(2,name);(void)s.row();
+}
+void Store::titleMinimumVersion(const std::string& id,const std::string& version) {
+    if (!identifier(id) || version.size()>32 || (!version.empty() && !validVersion(version))) throw Error("INVALID_ARGUMENT");
+    Statement s(db_,"UPDATE titles SET minimum_version=? WHERE id=?"); s.bind(1,version);s.bind(2,id);(void)s.row();
+    if (sqlite3_changes(db_)!=1) throw Error("NOT_FOUND");
 }
 std::string Store::user(const std::string& username,const std::string& password,const std::string& gamertag) {
     if (!identifier(username) || !identifier(gamertag) || gamertag.size()>32 || password.size()<8 || password.size()>256)

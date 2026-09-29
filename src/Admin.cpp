@@ -10,6 +10,7 @@ int main(int argc,char** argv) {
         if(argc<3)throw CnaService::Error("INVALID_ARGUMENT");
         CnaService::Store store(argv[1]);const std::string command=argv[2];
         if(command=="title"&&argc==5)store.title(argv[3],argv[4]);
+        else if(command=="title-minimum-version"&&argc==5)store.titleMinimumVersion(argv[3],argv[4]);
         else if(command=="user"&&argc==5) {
             std::string password;std::getline(std::cin,password);
             std::cout<<store.user(argv[3],password,argv[4])<<'\n';
