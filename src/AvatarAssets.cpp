@@ -172,6 +172,11 @@ void checkMaterial(const Glb& glb,std::size_t materialIndex)
     if(extras.contains("cnaFeature"))require(std::ranges::find(Features,extras["cnaFeature"].get<std::string>())!=Features.end());
     const int layer=extras.value("cnaLayer",0);
     require(layer==0||layer==1);
+    if(extras.contains("cnaSpecular")) {
+        require(extras["cnaSpecular"].is_number());
+        const float specular=extras["cnaSpecular"].get<float>();
+        require(specular>=0.0f&&specular<=4.0f);
+    }
     const auto pbr=m.value("pbrMetallicRoughness",Json::object());
     if(pbr.contains("baseColorFactor")) {
         const auto& factor=pbr["baseColorFactor"];
