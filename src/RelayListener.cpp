@@ -14,8 +14,8 @@ namespace {
 template<class Stream>
 class Connection final:public RelayChannel,public std::enable_shared_from_this<Connection<Stream>> {
 public:
-    Connection(Stream stream,Service& service,RelayHub& hub)
-        :socket_(std::move(stream)),service_(service),hub_(hub),deadline_(socket_.get_executor()),validation_(socket_.get_executor()),completion_(socket_.get_executor()){completion_.expires_at(std::chrono::steady_clock::time_point::max());}
+    Connection(Stream stream,Service& service,RelayHub& hub,net::thread_pool& workers)
+        :socket_(std::move(stream)),service_(service),hub_(hub),workers_(workers),deadline_(socket_.get_executor()),validation_(socket_.get_executor()),completion_(socket_.get_executor()){completion_.expires_at(std::chrono::steady_clock::time_point::max());}
     ~Connection() override {cleanup();}
     void offer(std::vector<unsigned char> frame) override {
         const auto result=queue_.push(std::move(frame));
@@ -44,7 +44,7 @@ public:
             if(closing_)throw Error("UNAUTHENTICATED");
             if(!socket_.got_text())throw Error("MALFORMED_MESSAGE");
             auto hello=parseRelayHello(beast::buffers_to_string(input.data()));input.consume(input.size());
-            grant_=service_.redeemRelayTicket(hello.game,hello.ticket);
+            grant_=co_await net::co_spawn(workers_,[&]()->net::awaitable<RelayGrant>{co_return service_.redeemRelayTicket(hello.game,hello.ticket);},net::use_awaitable);
             std::fill(hello.ticket.begin(),hello.ticket.end(),'\0');hello.ticket.clear();
             if(!hub_.attach(*grant_,self))throw Error("LIMIT_EXCEEDED");
             attached_=true;
@@ -98,9 +98,17 @@ private:
         auto self=this->shared_from_this();validation_.expires_after(std::chrono::seconds(RelayValidationSeconds));
         validation_.async_wait([self](auto ec){
             if(ec||self->closing_)return;
-            try {if(!self->service_.validateRelayGrant(*self->grant_)){self->stop(ws::close_code::policy_error);return;}}
-            catch(...){self->stop(ws::close_code::policy_error);return;}
-            self->validateLater();
+            // Validation reads storage: on the worker pool, with its own copy of the grant, and the
+            // verdict comes back to this connection's strand.
+            net::post(self->workers_,[self,grant=*self->grant_]{
+                bool valid=false;
+                try {valid=self->service_.validateRelayGrant(grant);} catch(...) {}
+                net::post(self->socket_.get_executor(),[self,valid]{
+                    if(self->closing_)return;
+                    if(!valid){self->stop(ws::close_code::policy_error);return;}
+                    self->validateLater();
+                });
+            });
         });
     }
     void kick() {
@@ -118,7 +126,7 @@ private:
         self->writing_=false;
     }
     ws::stream<Stream> socket_;
-    Service& service_;RelayHub& hub_;
+    Service& service_;RelayHub& hub_;net::thread_pool& workers_;
     net::steady_timer deadline_,validation_,completion_;
     std::optional<RelayGrant> grant_;
     RelayQueue queue_;RelayRate rate_;
@@ -126,12 +134,12 @@ private:
     bool ready_=false,writing_=false,closing_=false,attached_=false,aborted_=false;
 };
 }
-net::awaitable<void> serveRelay(RelayTcp stream,RelayRequest request,Service& service,RelayHub& hub) {
-    auto connection=std::make_shared<Connection<RelayTcp>>(std::move(stream),service,hub);
+net::awaitable<void> serveRelay(RelayTcp stream,RelayRequest request,Service& service,RelayHub& hub,net::thread_pool& workers) {
+    auto connection=std::make_shared<Connection<RelayTcp>>(std::move(stream),service,hub,workers);
     co_await connection->run(std::move(request));
 }
-net::awaitable<void> serveRelay(RelayTls stream,RelayRequest request,Service& service,RelayHub& hub) {
-    auto connection=std::make_shared<Connection<RelayTls>>(std::move(stream),service,hub);
+net::awaitable<void> serveRelay(RelayTls stream,RelayRequest request,Service& service,RelayHub& hub,net::thread_pool& workers) {
+    auto connection=std::make_shared<Connection<RelayTls>>(std::move(stream),service,hub,workers);
     co_await connection->run(std::move(request));
 }
 }

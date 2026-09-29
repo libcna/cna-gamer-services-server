@@ -27,7 +27,7 @@ private:
     Json issueRelayTicket(const std::string& user,const std::string& game,const Json& args);
     bool validateRelayGrantLocked(const RelayGrant& grant,bool redeemed);
     void pruneRelayTickets();
-    Json dispatch(const Json& request, const std::string& peer);
+    Json dispatch(const Json& request,const std::string& peer,std::unique_lock<std::mutex>& lock);
     Json identity(const std::string& id);
     Json readLeaderboard(const std::string& game,const Json& args);
     Json beginLeaderboardGame(const std::string& user,const std::string& game,const Json& args);

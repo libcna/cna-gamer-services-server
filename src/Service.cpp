@@ -10,8 +10,8 @@ std::string Service::handle(std::string_view bytes,std::string_view peer) {
     std::string id;
     try {
         const auto request=parse(bytes);validateRequest(request);id=stringField(request,"id",64);
-        std::lock_guard lock(mutex_);
-        auto result=response(id,"OK",dispatch(request,std::string(peer))).dump();
+        std::unique_lock lock(mutex_);
+        auto result=response(id,"OK",dispatch(request,std::string(peer),lock)).dump();
         if (result.size()>MaxMessageBytes) throw Error("LIMIT_EXCEEDED");
         return result;
     } catch (const Error& e) { return response(id,e.code()).dump(); }
@@ -36,7 +36,7 @@ Json Service::identity(const std::string& id) {
     if(reviews.number(1)>0)result["reputation"]=std::round(20.0*reviews.number(0)/reviews.number(1))/4.0;
     return result;
 }
-Json Service::dispatch(const Json& r,const std::string& peer) {
+Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<std::mutex>& lock) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
     static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog"};
@@ -70,13 +70,19 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
     if (op=="auth.login") {
         const auto username=stringField(a,"username",64),password=stringField(a,"password",256);
         if (!identifier(username)||password.size()<8) throw Error("AUTHENTICATION_FAILED");
-        Statement s(store_.db(),"SELECT id,salt,verifier FROM users WHERE username=?");s.bind(1,username);
-        const bool found=s.row();
-        const auto computed=passwordHash(password,found?s.text(1):"00000000000000000000000000000000");
-        const auto expected=found?s.text(2):std::string(64,'0');
+        std::string salt="00000000000000000000000000000000",expected(64,'0');bool found=false;
+        {
+            Statement s(store_.db(),"SELECT id,salt,verifier FROM users WHERE username=?");s.bind(1,username);
+            if((found=s.row())) {user=s.text(0);salt=s.text(1);expected=s.text(2);}
+        }
+        // The rate limit and request ID above were decided under the lock; the scrypt derivation,
+        // tens of milliseconds by design, runs without it so other players' requests keep flowing.
+        lock.unlock();
+        std::string computed;
+        try {computed=passwordHash(password,salt);} catch(...) {lock.lock();throw;}
+        lock.lock();
         if (!found || expected.size()!=computed.size() || CRYPTO_memcmp(expected.data(),computed.data(),computed.size())!=0)
             throw Error("AUTHENTICATION_FAILED");
-        user=s.text(0);
         return issueCredentials(user,game);
     }
     if(op=="auth.refresh")return refreshCredentials(game,a);

@@ -2,6 +2,7 @@
 #pragma once
 #include "CnaService/RelayAuthorization.hpp"
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/thread_pool.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <map>
@@ -38,9 +39,13 @@ using RelayRequest=boost::beast::http::request<boost::beast::http::string_body>;
 using RelayTcp=boost::beast::tcp_stream;
 using RelayTls=boost::beast::ssl_stream<RelayTcp>;
 /** @brief Serves explicit insecure numeric-loopback development only.
- * @param stream Owned connection. @param request Upgrade. @param service Authority. @param hub Routing. */
-boost::asio::awaitable<void> serveRelay(RelayTcp stream,RelayRequest request,Service& service,RelayHub& hub);
+ * @param stream Owned connection. @param request Upgrade. @param service Authority. @param hub Routing.
+ * @param workers Pool that runs the service's storage work off the network threads. */
+boost::asio::awaitable<void> serveRelay(RelayTcp stream,RelayRequest request,Service& service,RelayHub& hub,
+    boost::asio::thread_pool& workers);
 /** @brief Serves authenticated secure relay independently of HTTPS control requests.
- * @param stream Owned TLS connection. @param request Upgrade. @param service Authority. @param hub Routing. */
-boost::asio::awaitable<void> serveRelay(RelayTls stream,RelayRequest request,Service& service,RelayHub& hub);
+ * @param stream Owned TLS connection. @param request Upgrade. @param service Authority. @param hub Routing.
+ * @param workers Pool that runs the service's storage work off the network threads. */
+boost::asio::awaitable<void> serveRelay(RelayTls stream,RelayRequest request,Service& service,RelayHub& hub,
+    boost::asio::thread_pool& workers);
 }

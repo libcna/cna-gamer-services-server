@@ -64,6 +64,9 @@ add_test(NAME service_unit COMMAND service_tests)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME service_tls_e2e COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/transport_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(service_tls_e2e PROPERTIES TIMEOUT 120)
+# Concurrency benchmark (tests/service_benchmark.py); the smoke pass only checks it runs cleanly.
+add_test(NAME service_benchmark_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/service_benchmark.py ${CMAKE_CURRENT_BINARY_DIR} --smoke)
+set_tests_properties(service_benchmark_smoke PROPERTIES TIMEOUT 120)
 
 add_executable(directory_tests tests/DirectoryTests.cpp)
 target_link_libraries(directory_tests PRIVATE cna_service)
