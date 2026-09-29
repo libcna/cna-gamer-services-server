@@ -247,6 +247,23 @@ int main() {
             check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="RATE_LIMITED","refresh source rate limit");
         }
         {
+            // A 33rd sign-in (for instance a client without credential storage, launched again)
+            // signs the oldest family out rather than locking the account out.
+            {Store db(path.string());db.exec("UPDATE refresh_families SET revoked=1 WHERE user_id=(SELECT id FROM users WHERE username='bob');");}
+            std::vector<std::string> tokens;
+            for(int batch=0;tokens.size()<33;++batch) {
+                Service s(path.string());
+                for(int i=0;i<10&&tokens.size()<33;++i) {
+                    auto login=call(s,"two","auth.login",{{"username","bob"},{"password","bob-password"}});
+                    check(login["error"]=="OK","sign-in beyond the family cap");tokens.push_back(login["result"]["token"]);
+                }
+            }
+            Service s(path.string());
+            check(call(s,"two","auth.ping",Json::object(),tokens.back())["error"]=="OK","newest family live");
+            int revoked=0;for(const auto& token:tokens)revoked+=call(s,"two","auth.ping",Json::object(),token)["error"]=="UNAUTHENTICATED";
+            check(revoked==1&&call(s,"two","auth.ping",Json::object(),tokens.front())["error"]=="UNAUTHENTICATED","oldest family signed out");
+        }
+        {
             // One account's mutations cannot spend the title's request-ID budget for everyone else.
             Service s(path.string());
             const auto spender=call(s,"two","auth.login",{{"username","bob"},{"password","bob-password"}})["result"]["token"].get<std::string>();

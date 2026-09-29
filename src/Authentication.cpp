@@ -16,7 +16,18 @@ Json Service::issueCredentials(const std::string& user,const std::string& game,c
     Statement prune(store_.db(),"DELETE FROM refresh_families WHERE expires<=? OR revoked=1");prune.bind(1,timestamp);(void)prune.row();
     Statement expired(store_.db(),"DELETE FROM sessions WHERE expires<=?");expired.bind(1,timestamp);(void)expired.row();
     if(family.empty()) {
-        Statement cap(store_.db(),"SELECT COUNT(*) FROM refresh_families WHERE user_id=? AND revoked=0");cap.bind(1,user);(void)cap.row();if(cap.number(0)>=32)throw Error("LIMIT_EXCEEDED");
+        // A 33rd sign-in signs out the oldest family instead of being refused: a client without
+        // credential storage signs in afresh on every launch and seldom signs out, and refusing
+        // would lock its player out until a month-old family expired.
+        std::string oldest;
+        {
+            Statement cap(store_.db(),"SELECT COUNT(*) FROM refresh_families WHERE user_id=? AND revoked=0");cap.bind(1,user);(void)cap.row();
+            if(cap.number(0)>=32) {
+                Statement first(store_.db(),"SELECT id FROM refresh_families WHERE user_id=? AND revoked=0 ORDER BY expires,rowid LIMIT 1");
+                first.bind(1,user);if(first.row())oldest=first.text(0);
+            }
+        }
+        if(!oldest.empty())revokeFamily(oldest);
         Statement access(store_.db(),"SELECT COUNT(*) FROM sessions WHERE user_id=?");access.bind(1,user);(void)access.row();if(access.number(0)>=32)throw Error("LIMIT_EXCEEDED");
         family=randomHex(16);
     }else {
