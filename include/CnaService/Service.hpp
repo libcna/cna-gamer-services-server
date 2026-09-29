@@ -61,6 +61,7 @@ private:
     void pruneDirectory();
     bool migrateDirectoryHost(const std::string& session,const std::string& departing);
     Json invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args);
+    Json parties(const std::string& user,const std::string& game,const std::string& op,const Json& args);
     Json avatars(const std::string& user,const std::string& op,const Json& args,long long now);
     const CatalogInfo& catalog(long long version);
     Json invitationSnapshot(const std::string& id);

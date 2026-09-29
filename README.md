@@ -28,14 +28,16 @@ is missing.
 | `leaderboard-reads`, `local-leaderboard-commit`, `leaderboard-epoch-abort`, `ranked-arbitration` | Paged, centered and restricted reads; commits at XNA gameplay boundaries; Ranked rounds reconciled from every machine's report |
 | `messages`, `player-reviews` | Guide messages and the player review pane |
 | `avatars`, `avatar-catalog-packs` | One validated avatar description and revision per account, negotiated per client: the stored avatar when the client has (or will install) its catalog, else a marked projection; each catalog version described as one installable pack |
-| `session-directory`, `session-removal`, `host-migration`, `session-add-members`, `session-invitations` | PlayerMatch and Ranked directory, `RemoveFromSession`, host migration, `AddLocalGamer`, persistent invitations |
+| `session-directory`, `session-removal`, `host-migration`, `session-add-members`, `session-invitations`, `join-friend` | PlayerMatch and Ranked directory, `RemoveFromSession`, host migration, `AddLocalGamer`, persistent invitations, joining a friend's or party member's game |
+| `parties` | Account-level parties of up to 8 friends: invitations, members with presence and joinable games (XNA `PartySize`, `ShowParty`, `ShowPartySessions`, `SendPartyInvites`) |
+| `leaderboard-list`, `title-version` | The title's boards for the Guide's leaderboard page; a title's oldest accepted game version |
 | `relay-tickets`, `relay` | One-use tickets and the WSS relay for ENet datagrams |
 
 Not provided: Xbox LIVE compatibility of any kind; account self-registration or password change
 over the wire (the administrator provisions accounts); server push (clients poll friends, inboxes
 and the directory); privacy and block settings; TrueSkill; time windows for the `...Recent`
 leaderboard keys; direct peer-to-peer connections (every online datagram goes through the relay);
-Marketplace, PartnerToken, title updates, parties and voice. Linux is the tested server host;
+a store (Marketplace), PartnerToken, title update delivery, and voice. Linux is the tested server host;
 Windows and macOS builds are unvalidated.
 
 ## Build and run

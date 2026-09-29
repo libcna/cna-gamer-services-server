@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
 #include <array>
+#include <tuple>
 #include <filesystem>
 #include <iostream>
 using namespace CnaService;
@@ -73,6 +74,41 @@ int main() {
         check(call(service,"profile.setGamerZone",{{"gamerZone","family"}},tokens[0])["result"]["gamerZone"]=="family","zone chosen");
         check(profile("Alice")["gamerZone"]=="family","others see the zone");
         check(call(service,"profile.setGamerZone",{{"gamerZone","hardcore"}},tokens[0])["error"]=="INVALID_ARGUMENT","zone vocabulary");
+        // Parties: friends only, one party per account, the leader passes on when leaving.
+        auto party=[&](const std::string& token){return call(service,"parties.get",Json::object(),token)["result"];};
+        check(party(tokens[0])["party"].is_null()&&party(tokens[0])["invitations"].empty(),"no party yet");
+        check(call(service,"parties.invite",{{"gamertag","Bob"}},tokens[0])["error"]=="NOT_AUTHORIZED","friends only");
+        for(const auto& [a,b,tag,back]:std::array<std::tuple<int,int,const char*,const char*>,2>{{{0,1,"Bob","Alice"},{0,2,"Charlie","Alice"}}}) {
+            check(call(service,"friends.add",{{"gamertag",tag}},tokens[a])["error"]=="OK","friend request");
+            check(call(service,"friends.accept",{{"gamertag",back}},tokens[b])["error"]=="OK","friend accepted");
+        }
+        auto invited=call(service,"parties.invite",{{"gamertag","bob"}},tokens[0]);
+        check(invited["error"]=="OK"&&invited["result"]["party"]["members"].size()==1&&invited["result"]["party"]["leaderId"]==invited["result"]["party"]["members"][0]["userId"],"inviting starts a party");
+        const auto id=invited["result"]["party"]["id"].get<std::string>();
+        auto bobView=party(tokens[1]);
+        check(bobView["party"].is_null()&&bobView["invitations"].size()==1&&bobView["invitations"][0]["senderGamertag"]=="Alice"&&bobView["invitations"][0]["members"]==1,"invitation in the inbox");
+        check(call(service,"parties.accept",{{"party",std::string(32,'0')}},tokens[1])["error"]=="NOT_FOUND","only an invited party");
+        auto joined=call(service,"parties.accept",{{"party",id}},tokens[1])["result"];
+        check(joined["party"]["members"].size()==2&&joined["invitations"].empty(),"joined");
+        Json alice;for(const auto& member:joined["party"]["members"])if(member["gamertag"]=="Alice")alice=member;
+        check(alice.is_object()&&alice["online"]==true,"members with their state");
+        // Alice's player-match lobby is joinable; a party member sees it.
+        check(alice["joinable"]==true,"a member's joinable game");
+        check(call(service,"parties.invite",{{"gamertag","Bob"}},tokens[0])["error"]=="CONFLICT","already a member");
+        check(call(service,"parties.invite",{{"gamertag","Charlie"}},tokens[0])["error"]=="OK","second invitation");
+        check(call(service,"parties.decline",{{"party",id}},tokens[2])["result"]["invitations"].empty(),"declined");
+        check(call(service,"parties.leave",Json::object(),tokens[0])["result"]["party"].is_null(),"leader leaves");
+        auto rest=party(tokens[1]);
+        check(rest["party"]["members"].size()==1&&rest["party"]["leaderId"]==rest["party"]["members"][0]["userId"],"leadership passes on");
+        check(call(service,"parties.leave",Json::object(),tokens[1])["result"]["party"].is_null()&&party(tokens[1])["party"].is_null(),"the last member ends the party");
+        // Joining a friend's game from the Guide: a join request the friend's session grants, never listed.
+        auto request=call(service,"invites.joinFriend",{{"gamertag","Alice"}},tokens[2]);
+        check(request["error"]=="OK"&&request["result"]["senderGamertag"]=="Alice"&&request["result"]["status"]=="pending","join request granted");
+        check(call(service,"invites.list",{{"start",0},{"limit",8}},tokens[2])["result"]["invites"].empty(),"join requests stay out of the inbox");
+        check(call(service,"invites.joinFriend",{{"gamertag","Alice"}},tokens[2])["result"]["invite"]==request["result"]["invite"],"one request per game");
+        check(call(service,"invites.accept",{{"invite",request["result"]["invite"]}},tokens[2])["error"]=="OK","accepted like an invitation");
+        check(call(service,"invites.joinFriend",{{"gamertag","Bob"}},tokens[2])["error"]=="NOT_AUTHORIZED","friends or party members only");
+        check(call(service,"invites.joinFriend",{{"gamertag","Charlie"}},tokens[0])["error"]=="NOT_FOUND","nothing to join");
         clean();std::cout<<"social "<<checks<<" assertions passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<"social test failed: "<<error.what()<<"\n";clean();return 1;}
 }

@@ -29,7 +29,7 @@ Json Service::invitationSnapshot(const std::string& id) {
 Json Service::invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args) {
     static const std::map<std::string,std::set<std::string>> fields{
         {"invites.send",{"session","gamertag"}},{"invites.list",{"start","limit"}},
-        {"invites.get",{"invite"}},{"invites.accept",{"invite"}},{"invites.dismiss",{"invite"}}};
+        {"invites.get",{"invite"}},{"invites.accept",{"invite"}},{"invites.dismiss",{"invite"}},{"invites.joinFriend",{"gamertag"}}};
     const auto definition=fields.find(op);if(definition==fields.end())throw Error("UNKNOWN_OPERATION");
     if(args.size()!=definition->second.size())throw Error("INVALID_ARGUMENT");
     for(const auto& [key,value]:args.items()){(void)value;if(!definition->second.contains(key))throw Error("INVALID_ARGUMENT");}
@@ -73,9 +73,39 @@ Json Service::invitations(const std::string& user,const std::string& game,const 
         insert.bind(1,invite);insert.bind(2,game);insert.bind(3,session);insert.bind(4,user);insert.bind(5,recipient);insert.bind(6,timestamp);insert.bind(7,timestamp+InviteLifetimeSeconds);(void)insert.row();
         auto result=invitationSnapshot(invite);transaction.commit();return result;
     }
+    if(op=="invites.joinFriend") {
+        // Joining a friend's or party member's game from the Guide: an invitation the friend's
+        // session grants the asker, accepted by the asker like any other, never shown in an inbox.
+        const auto gamertag=stringField(args,"gamertag",32);
+        Statement target(store_.db(),"SELECT id FROM users WHERE gamertag=? COLLATE NOCASE");target.bind(1,gamertag);
+        if(!target.row())throw Error("NOT_FOUND");
+        const auto host=target.text(0);
+        if(host==user)throw Error("INVALID_ARGUMENT");
+        Statement related(store_.db(),"SELECT (EXISTS(SELECT 1 FROM friends WHERE user_id=?1 AND friend_id=?2) AND EXISTS(SELECT 1 FROM friends WHERE user_id=?2 AND friend_id=?1)) "
+            "OR EXISTS(SELECT 1 FROM party_members a JOIN party_members b ON a.party_id=b.party_id WHERE a.user_id=?1 AND b.user_id=?2)");
+        related.bind(1,user);related.bind(2,host);(void)related.row();
+        if(!related.number(0))throw Error("NOT_AUTHORIZED");
+        Statement session(store_.db(),"SELECT d.id FROM directory_members m JOIN directory_sessions d ON d.id=m.session_id WHERE m.game_id=?1 AND m.user_id=?2 "
+            "AND d.kind='player' AND d.expires>?3 AND (d.state='lobby' OR d.allow_join=1) "
+            "AND (SELECT COUNT(*) FROM directory_members o WHERE o.session_id=d.id AND o.private_slot=0)<d.max_gamers-d.private_slots LIMIT 1");
+        session.bind(1,game);session.bind(2,host);session.bind(3,timestamp);
+        if(!session.row())throw Error("NOT_FOUND");
+        const auto id=session.text(0);
+        Statement joined(store_.db(),"SELECT 1 FROM directory_members WHERE session_id=? AND user_id=?");joined.bind(1,id);joined.bind(2,user);
+        if(joined.row())throw Error("INVALID_STATE");
+        Statement existing(store_.db(),"SELECT id FROM session_invitations WHERE game_id=? AND session_id=? AND sender_id=? AND recipient_id=? AND requested=1 AND status='pending' AND expires>? LIMIT 1");
+        existing.bind(1,game);existing.bind(2,id);existing.bind(3,host);existing.bind(4,user);existing.bind(5,timestamp);
+        if(existing.row()){auto result=invitationSnapshot(existing.text(0));transaction.commit();return result;}
+        Statement titleCap(store_.db(),"SELECT COUNT(*) FROM session_invitations WHERE game_id=?");titleCap.bind(1,game);(void)titleCap.row();
+        if(titleCap.number(0)>=MaxTitleInvites)throw Error("LIMIT_EXCEEDED");
+        const auto invite=randomHex(16);
+        Statement insert(store_.db(),"INSERT INTO session_invitations(id,game_id,session_id,sender_id,recipient_id,created,expires,requested) VALUES(?,?,?,?,?,?,?,1)");
+        insert.bind(1,invite);insert.bind(2,game);insert.bind(3,id);insert.bind(4,host);insert.bind(5,user);insert.bind(6,timestamp);insert.bind(7,timestamp+InviteLifetimeSeconds);(void)insert.row();
+        auto result=invitationSnapshot(invite);transaction.commit();return result;
+    }
     if(op=="invites.list") {
         const auto start=integerField(args,"start",0,MaxIncomingInvites),limit=integerField(args,"limit",1,32);
-        Statement inbox(store_.db(),"SELECT id FROM session_invitations WHERE game_id=? AND recipient_id=? AND status IN ('pending','accepted') AND expires>? ORDER BY created,id LIMIT ? OFFSET ?");
+        Statement inbox(store_.db(),"SELECT id FROM session_invitations WHERE game_id=? AND recipient_id=? AND status IN ('pending','accepted') AND expires>? AND requested=0 ORDER BY created,id LIMIT ? OFFSET ?");
         inbox.bind(1,game);inbox.bind(2,user);inbox.bind(3,timestamp);inbox.bind(4,limit+1);inbox.bind(5,start);
         Json rows=Json::array();while(inbox.row())rows.push_back(invitationSnapshot(inbox.text(0)));
         const bool more=rows.size()>static_cast<std::size_t>(limit);if(more)rows.erase(rows.end()-1);
