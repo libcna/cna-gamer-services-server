@@ -149,6 +149,13 @@ Release build, 64 players, 15 s windows, a 16-core Linux machine shared with oth
 | full request-ID table | 188 req/s at 90,000 IDs (with the fsync fix already in) | 1,964 req/s at 200,000 IDs |
 | descriptors exhausted | server exited | keeps serving |
 
+Re-run at `4bc685c` (catalog packs, title versions, parties), same command, with the machine
+busier (load average about 4.3 from other work): steady 1,312 req/s, p50 44 ms, p99 73 ms; sign-in
+storm 1,024 req/s, sign-in p50 408 ms; 160 idle connections 1,127 req/s; 200,000 request IDs
+1,507 req/s; descriptors exhausted, still serving; no errors in any scenario. In the same minutes the
+server before this work (`4ba7f95`) measured 1,329 and 992 req/s steady, so the lower figures are
+the load, not the new operations.
+
 These are closed-loop saturation figures. A player idling in a menu costs about two requests a
 minute (the heartbeat), so the real ceiling depends on what games do between heartbeats. Password
 sign-in is expensive by design; returning players renew with refresh tokens, which cost no
