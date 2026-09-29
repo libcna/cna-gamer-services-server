@@ -88,6 +88,16 @@ int main() {
             read["gamers"]=Json::array({"Alice"});page=call(s,"one","leaderboards.read",read,alice)["result"];check(page["total"]==1&&page["start"]==0&&page["entries"][0]["rank"]==2,"restricted board global rank");
             read.erase("pivot");read["gamers"]=Json::array();check(call(s,"one","leaderboards.read",read,alice)["result"]["total"]==0,"empty gamer restriction");
             read.erase("gamers");read["mode"]=1;check(call(s,"one","leaderboards.read",read,alice)["result"]["entries"][0]["gamertag"]=="Alice","ascending mode isolation");
+            {
+                // The title's boards, in key and mode order, with their entry counts.
+                const auto boards=call(s,"one","leaderboards.list",Json::object(),alice)["result"]["boards"];
+                check(boards.size()>=2&&boards[0]["key"]=="BestScoreLifeTime"&&boards[0]["mode"]==0&&boards[0]["entries"]==2&&boards[0]["ascending"]==false,"board list");
+                bool ascending=false;for(const auto& board:boards)ascending=ascending||(board["key"]=="BestScoreLifeTime"&&board["mode"]==1&&board["ascending"]==true);
+                check(ascending,"board list modes");
+                check(call(s,"two","leaderboards.list",Json::object(),other)["result"]["boards"].empty()||
+                      call(s,"two","leaderboards.list",Json::object(),other)["result"]["boards"][0]["entries"]==0,"board list title isolation");
+                check(call(s,"one","leaderboards.list",Json::object())["error"]!="OK","board list needs a token");
+            }
             read["mode"]=0;check(call(s,"two","leaderboards.read",read,other)["result"]["total"]==0,"title board isolation");
             read["size"]=0;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board zero page");read["size"]=101;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board page cap");read["size"]=1;read["mode"]=99;check(call(s,"one","leaderboards.read",read,alice)["error"]=="NOT_FOUND","missing board");
             check(call(s,"two","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","token isolation");

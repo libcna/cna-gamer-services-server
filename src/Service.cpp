@@ -12,7 +12,7 @@ namespace {
 // power loss -- credentials and revocations, awards, scores, friends, messages, profile and
 // avatar edits -- commits with a full sync.
 const std::set<std::string> Ephemeral{"auth.ping","gamer.lookup","profile.get","profile.gameDefaults","friends.list",
-    "presence.set","achievements.list","assets.read","leaderboards.read","leaderboards.definition","sessions.relayTicket",
+    "presence.set","achievements.list","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","sessions.relayTicket",
     "sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited",
     "sessions.leave","sessions.remove","sessions.addMembers","invites.list","invites.get","messages.list","avatars.get","avatars.catalog","avatars.catalogPack"};
 // Replay protection is for requests whose repetition would change something twice. Reads, and
@@ -20,8 +20,8 @@ const std::set<std::string> Ephemeral{"auth.ping","gamer.lookup","profile.get","
 // harmlessly; recording them would spend a title's daily budget on its own keep-alive traffic.
 const std::set<std::string> Unrecorded{"auth.ping","sessions.touch","presence.set","presence.status","gamer.lookup",
     "profile.get","profile.gameDefaults","friends.list","achievements.list","assets.read","leaderboards.read",
-    "leaderboards.definition","sessions.find","sessions.get","invites.list","invites.get","messages.list","avatars.get",
-    "avatars.catalog","avatars.catalogPack"};
+    "leaderboards.definition","leaderboards.list","sessions.find","sessions.get","invites.list","invites.get","messages.list",
+    "avatars.get","avatars.catalog","avatars.catalogPack"};
 // Recorded request IDs per title and 24 hours: the storage backstop.
 constexpr long long MaxTitleRequestIds=1000000;
 // Recorded request IDs per account, title and 24-hour window, so that no one account can spend
@@ -118,9 +118,9 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<std::mutex>& lock) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user,token;
@@ -380,6 +380,17 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     if(op=="leaderboards.game.abort")return abortLeaderboardGame(user,game,a);
     if(op=="leaderboards.game.commit")return commitLeaderboardGame(user,game,a);
     if(op=="leaderboards.read")return readLeaderboard(game,a);
+    if(op=="leaderboards.list") {
+        // The title's provisioned boards, for a system leaderboard page; a game reads its own by identity.
+        Statement boards(store_.db(),"SELECT b.key,b.mode,b.ascending,b.arbitrated,(SELECT COUNT(*) FROM leaderboard_entries e WHERE e.game_id=b.game_id AND e.key=b.key AND e.mode=b.mode) FROM leaderboards b WHERE b.game_id=? ORDER BY b.key,b.mode LIMIT 257");
+        boards.bind(1,game);
+        Json list=Json::array();
+        while(boards.row()) {
+            if(list.size()>=256)throw Error("LIMIT_EXCEEDED");
+            list.push_back(Json{{"key",boards.text(0)},{"mode",boards.number(1)},{"ascending",boards.number(2)!=0},{"arbitrated",boards.number(3)!=0},{"entries",boards.number(4)}});
+        }
+        return Json{{"boards",list}};
+    }
     if(op=="leaderboards.definition") {
         Statement board(store_.db(),"SELECT ascending,aggregation,arbitrated,columns FROM leaderboards WHERE game_id=? AND key=? AND mode=?");
         board.bind(1,game);board.bind(2,stringField(a,"key",64));board.bind(3,integerField(a,"mode",-2147483648LL,2147483647LL));
