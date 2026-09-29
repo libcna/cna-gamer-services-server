@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Real TLS listener, independent client processes and restart persistence."""
-import json, os, pathlib, ssl, subprocess, sys, tempfile, urllib.request, urllib.parse, sqlite3, struct, zlib, hashlib, selectors
+import json, os, pathlib, socket, ssl, subprocess, time, sys, tempfile, urllib.request, urllib.parse, sqlite3, struct, zlib, hashlib, selectors
 
 
 def request(url, ca, game, op, args=None, token=None):
@@ -136,6 +136,10 @@ def main():
         try:
             server, url = start()
             assert request(url, str(ca), "one", "hello")["error"] == "OK"
+            # GSX-E: one server process owns a database; a second one refuses to start.
+            second = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "127.0.0.1", "--port", "0",
+                                     "--cert", str(ca), "--key", str(key)], capture_output=True, text=True, timeout=15)
+            assert second.returncode != 0 and "DATABASE_IN_USE" in second.stderr, "one server process per database"
             for endpoint, trust in ((url, None), (url.replace("localhost", "127.0.0.1"), str(ca))):
                 rejected = False
                 try: request(endpoint, trust, "one", "hello")
@@ -280,6 +284,16 @@ def main():
             assert request(url,str(ca),"one","auth.ping",token=rotated["token"])["error"]=="UNAUTHENTICATED"
             assert request(url, str(ca), "one", "auth.logout", token=token)["error"] == "OK"
             assert request(url, str(ca), "one", "achievements.list", token=token)["error"] == "UNAUTHENTICATED"
+            # GSX-E: a host that connects and drops in a loop is cut off at 600 new connections a
+            # minute (each costs a TLS handshake); the open ones have drained before the check.
+            port = int(url.rsplit(":", 1)[1].split("/")[0])
+            for _ in range(600):
+                with socket.create_connection(("127.0.0.1", port), timeout=5): pass
+            time.sleep(1.5)
+            cut = False
+            try: request(url, str(ca), "one", "hello")
+            except (urllib.error.URLError, ssl.SSLError, ConnectionError, OSError): cut = True
+            assert cut, "new connections per address and minute"
         finally:
             if server: stop(server)
         refused = subprocess.run([str(build/"cna-gamer-services-server"), "--database", str(db), "--listen", "0.0.0.0", "--insecure-loopback"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

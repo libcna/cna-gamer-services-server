@@ -115,8 +115,13 @@ full, a locked database); the response to the client never carries details. SIGI
 stop the server.
 
 **One process.** The service is one process with one SQLite writer and an in-memory relay hub. It
-does not scale across machines. Put a firewall or proxy in front of it against floods from many
-addresses.
+does not scale across machines. A second server process on the same database refuses to start
+(`DATABASE_IN_USE`: the first holds an advisory lock on `<database>.lock` until it exits); the admin
+tool deliberately takes no lock and works beside a running server. Back up a running server with
+SQLite's online backup, which is consistent under WAL: `sqlite3 service.sqlite3 ".backup
+service-backup.sqlite3"`. One address may hold 32 control connections and open 600 new ones a
+minute (each costs a TLS handshake); put a firewall or proxy in front of the server against floods
+from many addresses.
 
 ## Capacity
 

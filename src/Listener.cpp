@@ -51,13 +51,23 @@ bool signIn(std::string_view body) {
 // relay that redeemed its ticket leaves the pool; RelayHub bounds those by account-backed grants.
 constexpr int MaxControlConnections=256;
 constexpr int MaxPeerConnections=32;
+// New connections one address may open a minute: every one costs a TLS handshake, so a host that
+// connects and drops in a loop is cut off long before it matters, while a NAT full of players on
+// keep-alive connections stays far below it.
+constexpr int MaxPeerConnectionsPerMinute=600;
 class Admission {
 public:
     bool admit(const std::string& peer) {
         std::lock_guard lock(mutex_);
+        const auto now=std::chrono::steady_clock::now();
+        if(rates_.size()>=4096)std::erase_if(rates_,[&](const auto& entry){return now-entry.second.first>=std::chrono::minutes(1);});
+        auto& [start,opened]=rates_[peer];
+        if(now-start>=std::chrono::minutes(1)){start=now;opened=0;}
         const auto held=peers_.find(peer);
-        if(control_>=MaxControlConnections||(held!=peers_.end()&&held->second>=MaxPeerConnections)){++refused_;return false;}
-        ++peers_[peer];++control_;return true;
+        if(control_>=MaxControlConnections||(held!=peers_.end()&&held->second>=MaxPeerConnections)||opened>=MaxPeerConnectionsPerMinute) {
+            ++refused_;return false;
+        }
+        ++opened;++peers_[peer];++control_;return true;
     }
     /** Open control connections, and refusals since the previous call. */
     std::pair<int,unsigned long long> take() {std::lock_guard lock(mutex_);return {control_,std::exchange(refused_,0)};}
@@ -68,6 +78,7 @@ public:
 private:
     std::mutex mutex_;
     std::map<std::string,int> peers_;
+    std::map<std::string,std::pair<std::chrono::steady_clock::time_point,int>> rates_;
     int control_=0;
     unsigned long long refused_=0;
 };
