@@ -142,9 +142,11 @@ def main():
                 run_cna(url, "alice", "none", "reject", trust="")
                 run_cna(url.replace("localhost", "127.0.0.1"), "alice", "none", "reject")
                 run_cna(url, "alice", "none", "award")
-                cache_mtime=(root/"cache"/image_hash).stat().st_mtime_ns
+                # A write is a temporary renamed into place (a new inode); a read may only refresh
+                # the entry's use time, which the client's least-recently-used eviction relies on.
+                cache_inode=(root/"cache"/image_hash).stat().st_ino
                 run_cna(url, "bob", "none", "read")
-                assert (root/"cache"/image_hash).stat().st_mtime_ns==cache_mtime,"warm cross-process cache must avoid rewriting"
+                assert (root/"cache"/image_hash).stat().st_ino==cache_inode,"warm cross-process cache must avoid rewriting"
                 run_cna(url, "alice", "none", "read", game="two")
                 run_cna(url, "alice", "earned", "read")
             for user, action in (("alice", "award"), ("bob", "read")):
