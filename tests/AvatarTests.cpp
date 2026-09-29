@@ -156,6 +156,12 @@ int main() {
         check(call(service,"avatars.catalog",{{"version",7}},tokens[1])["error"]=="NOT_FOUND","unknown version");
         {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");}
         check(call(service,"avatars.set",{{"description",hex(description(1,outfit))}},tokens[1])["error"]=="OK","v1 descriptions stay valid");
+        // Versions are exact: a v1 description is checked against v1 alone, and v1 is served as imported.
+        {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");}
+        check(call(service,"avatars.set",{{"description",hex(description(1,{1,20,40,60,0,102}))}},tokens[1])["error"]=="INVALID_ARGUMENT",
+              "a v1 description cannot name an item only v2 has");
+        check(call(service,"avatars.catalog",{{"version",1}},tokens[1])["result"]["manifest"]==parse(catalog(1,v1).manifest),
+              "v1 is served exactly as imported after v2");
 
         // Administration.
         {Store store(path.string());
