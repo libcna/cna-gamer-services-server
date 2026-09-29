@@ -122,9 +122,28 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         while(s.row()) {
             if(friends.size()>=256)throw Error("LIMIT_EXCEEDED");
             const bool accepted=s.number(5)&&s.number(6), online=accepted&&s.number(2);
-            friends.push_back(Json{{"userId",s.text(0)},{"gamertag",s.text(1)},{"online",online},
+            Json row{{"userId",s.text(0)},{"gamertag",s.text(1)},{"online",online},
                 {"presenceMode",online?s.number(3):0},{"presenceText",online?s.text(4):""},
-                {"accepted",accepted},{"requestSent",!accepted&&s.number(5)!=0},{"requestReceived",!accepted&&s.number(6)!=0}});
+                {"accepted",accepted},{"requestSent",!accepted&&s.number(5)!=0},{"requestReceived",!accepted&&s.number(6)!=0},
+                {"joinable",false},{"inviteReceivedFrom",false},{"inviteSentTo",false},{"inviteAccepted",false},{"inviteRejected",false}};
+            if(accepted) {
+                // Joinable: in this title's player-match session that is live, admits joiners now and has a public slot.
+                Statement joinable(store_.db(),"SELECT EXISTS(SELECT 1 FROM directory_members m JOIN directory_sessions d ON d.id=m.session_id "
+                    "WHERE m.game_id=? AND m.user_id=? AND d.kind='player' AND d.expires>? AND (d.state='lobby' OR d.allow_join=1) "
+                    "AND (SELECT COUNT(*) FROM directory_members o WHERE o.session_id=d.id AND o.private_slot=0)<d.max_gamers-d.private_slots)");
+                joinable.bind(1,game);joinable.bind(2,s.text(0));joinable.bind(3,timestamp);(void)joinable.row();
+                // This title's unexpired invitations between the two, as XNA's friend state reports them.
+                Statement invites(store_.db(),"SELECT "
+                    "EXISTS(SELECT 1 FROM session_invitations WHERE game_id=?1 AND sender_id=?2 AND recipient_id=?3 AND status='pending' AND expires>?4),"
+                    "EXISTS(SELECT 1 FROM session_invitations WHERE game_id=?1 AND sender_id=?3 AND recipient_id=?2 AND status='pending' AND expires>?4),"
+                    "EXISTS(SELECT 1 FROM session_invitations WHERE game_id=?1 AND sender_id=?3 AND recipient_id=?2 AND status IN ('accepted','used') AND expires>?4),"
+                    "EXISTS(SELECT 1 FROM session_invitations WHERE game_id=?1 AND sender_id=?3 AND recipient_id=?2 AND status='dismissed' AND expires>?4)");
+                invites.bind(1,game);invites.bind(2,s.text(0));invites.bind(3,user);invites.bind(4,timestamp);(void)invites.row();
+                row["joinable"]=online&&joinable.number(0)!=0;
+                row["inviteReceivedFrom"]=invites.number(0)!=0;row["inviteSentTo"]=invites.number(1)!=0;
+                row["inviteAccepted"]=invites.number(2)!=0;row["inviteRejected"]=invites.number(3)!=0;
+            }
+            friends.push_back(std::move(row));
         }
         return Json{{"friends",friends}};
     }

@@ -42,6 +42,13 @@ int main() {
         check(invite.size()==32&&sent["result"]["session"]==session&&sent["result"]["status"]=="pending","opaque invitation identity and pending state");
         check(sent["result"]["expires"].get<long long>()-sent["result"]["created"].get<long long>()==InviteLifetimeSeconds,"bounded invitation TTL");
         check(send("bob",tokens[0])["result"]==sent["result"],"duplicate pending send is idempotent without extending TTL");
+        // XNA friend state: the invitation shows on both sides; a session without a free public slot is not joinable.
+        check(call(*service,"friends.add",{{"gamertag","bob"}},tokens[0])["error"]=="OK"&&
+              call(*service,"friends.accept",{{"gamertag","alice"}},tokens[1])["error"]=="OK","friendship for friend state");
+        auto friendOf=[&](const std::string& token){return call(*service,"friends.list",Json::object(),token)["result"]["friends"][0];};
+        check(friendOf(tokens[0])["inviteSentTo"]==true&&friendOf(tokens[0])["inviteReceivedFrom"]==false,"sent invitation in friend state");
+        check(friendOf(tokens[1])["inviteReceivedFrom"]==true&&friendOf(tokens[1])["inviteSentTo"]==false,"received invitation in friend state");
+        check(friendOf(tokens[1])["joinable"]==false,"no free public slot, not joinable");
         const auto inbox=call(*service,"invites.list",{{"start",0},{"limit",32}},tokens[1]);
         check(inbox["error"]=="OK"&&inbox["result"]["invites"].size()==1&&!inbox["result"]["more"].get<bool>(),"authenticated recipient inbox");
         check(call(*service,"invites.list",{{"start",0},{"limit",32}},tokens[0])["result"]["invites"].empty(),"sender is not recipient");
@@ -53,6 +60,7 @@ int main() {
         check(call(*service,"sessions.joinInvited",join,tokens[1])["error"]=="INVALID_STATE","receipt is not user acceptance");
         auto accepted=call(*service,"invites.accept",{{"invite",invite}},tokens[1]);
         check(accepted["error"]=="OK"&&accepted["result"]["status"]=="accepted"&&accepted["result"]["acceptedAt"].get<long long>()>0,"explicit acceptance transition");
+        check(friendOf(tokens[0])["inviteAccepted"]==true&&friendOf(tokens[0])["inviteSentTo"]==false&&friendOf(tokens[0])["inviteRejected"]==false,"accepted invitation in friend state");
         check(call(*service,"invites.accept",{{"invite",invite}},tokens[1])["result"]==accepted["result"],"accept retry does not repeat transition");
         service.reset();service=std::make_unique<Service>(path.string());
         check(call(*service,"invites.get",{{"invite",invite}},tokens[1])["result"]==accepted["result"],"accepted invitation persists through restart");
@@ -69,6 +77,13 @@ int main() {
         check(call(*service,"invites.accept",{{"invite",invite}},tokens[1])["error"]=="INVALID_STATE","consumed token cannot be accepted again");
         check(call(*service,"invites.dismiss",{{"invite",invite}},tokens[1])["error"]=="INVALID_STATE","consumed token cannot be dismissed");
         check(call(*service,"sessions.leave",{{"session",session}},tokens[1])["error"]=="OK","grouped leave");
+        {
+            Json open=create;open["privateSlots"]=0;open["participants"]=Json::array({tokens[1]});
+            const auto hosted=call(*service,"sessions.create",open,tokens[1]);check(hosted["error"]=="OK","friend hosts an open lobby");
+            check(friendOf(tokens[0])["joinable"]==true,"an open lobby with a public slot is joinable");
+            check(call(*service,"sessions.leave",{{"session",hosted["result"]["session"]}},tokens[1])["error"]=="OK","open lobby closed");
+            check(friendOf(tokens[0])["joinable"]==false,"no session, not joinable");
+        }
         check(call(*service,"sessions.joinInvited",join,tokens[1])["error"]=="INVALID_STATE","used token cannot resurrect membership after leave");
         auto second=send("bob",tokens[2]);check(second["error"]=="OK","another active local may invite");
         const auto secondId=second["result"]["invite"].get<std::string>();
