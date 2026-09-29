@@ -3,6 +3,7 @@
 #include "CnaService/RelayAuthorization.hpp"
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/thread_pool.hpp>
+#include <functional>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <map>
@@ -40,12 +41,14 @@ using RelayTcp=boost::beast::tcp_stream;
 using RelayTls=boost::beast::ssl_stream<RelayTcp>;
 /** @brief Serves explicit insecure numeric-loopback development only.
  * @param stream Owned connection. @param request Upgrade. @param service Authority. @param hub Routing.
- * @param workers Pool that runs the service's storage work off the network threads. */
+ * @param workers Pool that runs the service's storage work off the network threads.
+ * @param authenticated Called once the ticket was redeemed and the machine attached. */
 boost::asio::awaitable<void> serveRelay(RelayTcp stream,RelayRequest request,Service& service,RelayHub& hub,
-    boost::asio::thread_pool& workers);
+    boost::asio::thread_pool& workers,std::function<void()> authenticated);
 /** @brief Serves authenticated secure relay independently of HTTPS control requests.
  * @param stream Owned TLS connection. @param request Upgrade. @param service Authority. @param hub Routing.
- * @param workers Pool that runs the service's storage work off the network threads. */
+ * @param workers Pool that runs the service's storage work off the network threads.
+ * @param authenticated Called once the ticket was redeemed and the machine attached. */
 boost::asio::awaitable<void> serveRelay(RelayTls stream,RelayRequest request,Service& service,RelayHub& hub,
-    boost::asio::thread_pool& workers);
+    boost::asio::thread_pool& workers,std::function<void()> authenticated);
 }

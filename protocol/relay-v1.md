@@ -82,7 +82,9 @@ membership/host lease loss or grant expiry closes the channel within that interv
 renew the separate 90s directory lease. A continuously revoked grant may therefore remain routed
 until its next check, at most 5s; no claim of immediate per-datagram account revocation.
 
-Resource policy: 96 live relay channels (out of the listener's 128 total connections), 512 incoming
+Resource policy: 1024 live authenticated relay channels, counted apart from the listener's 256
+control connections (at most 32 per source address, which also covers upgrades that have not yet
+redeemed a ticket), 512 incoming
 datagram/control messages per fixed monotonic one-second window, 1 MiB binary bytes/window.
 Application write queues hold <=64 complete frames/263,680 bytes, including the active write.
 Capacity is reserved before posting across strands; at most one wake/overflow notification is

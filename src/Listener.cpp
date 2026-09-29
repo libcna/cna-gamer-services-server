@@ -8,8 +8,13 @@
 #include <boost/asio/ssl.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
-#include <atomic>
+#include <algorithm>
+#include <map>
+#include <mutex>
 #include <thread>
+#if __has_include(<sys/resource.h>)
+#include <sys/resource.h>
+#endif
 #include <iostream>
 
 namespace CnaService {
@@ -18,20 +23,63 @@ namespace beast=boost::beast;
 namespace http=beast::http;
 using tcp=net::ip::tcp;
 namespace {
-std::atomic<int> connections{0};
 // Storage work runs on its own threads, and sign-in on two more: a burst of scrypt derivations
 // (tens of milliseconds and 32 MiB each) then never queues ordinary requests behind it.
 struct Workers {
     net::thread_pool requests{4};
     net::thread_pool signIns{2};
 };
+void raiseDescriptorLimit() {
+#if __has_include(<sys/resource.h>)
+    // Every control and relay connection is a descriptor; take what the host allows, up to a
+    // generous ceiling. Should the limit still run out, accept backs off instead of failing.
+    rlimit limit{};
+    if(getrlimit(RLIMIT_NOFILE,&limit)==0) {
+        const rlim_t wanted=limit.rlim_max==RLIM_INFINITY?65536:std::min<rlim_t>(limit.rlim_max,65536);
+        if(limit.rlim_cur<wanted){limit.rlim_cur=wanted;(void)setrlimit(RLIMIT_NOFILE,&limit);}
+    }
+#endif
+}
 bool signIn(std::string_view body) {
     try {const auto request=parse(body);return request.is_object()&&request.contains("op")&&request["op"]=="auth.login";}
     catch(...) {return false;}
 }
-struct ConnectionLease { ~ConnectionLease(){--connections;} };
+// Control requests and relay upgrades that have not redeemed a ticket share one pool, of which a
+// single address can hold only a slice: one slow or hostile host cannot shut everyone else out. A
+// relay that redeemed its ticket leaves the pool; RelayHub bounds those by account-backed grants.
+constexpr int MaxControlConnections=256;
+constexpr int MaxPeerConnections=32;
+class Admission {
+public:
+    bool admit(const std::string& peer) {
+        std::lock_guard lock(mutex_);
+        const auto held=peers_.find(peer);
+        if(control_>=MaxControlConnections||(held!=peers_.end()&&held->second>=MaxPeerConnections))return false;
+        ++peers_[peer];++control_;return true;
+    }
+    void leave(const std::string& peer) {
+        std::lock_guard lock(mutex_);
+        --control_;if(const auto held=peers_.find(peer);held!=peers_.end()&&--held->second<=0)peers_.erase(held);
+    }
+private:
+    std::mutex mutex_;
+    std::map<std::string,int> peers_;
+    int control_=0;
+};
+class ConnectionLease {
+public:
+    ConnectionLease(Admission& admission,std::string peer):admission_(admission),peer_(std::move(peer)) {}
+    ~ConnectionLease() {release();}
+    ConnectionLease(const ConnectionLease&)=delete;
+    ConnectionLease& operator=(const ConnectionLease&)=delete;
+    void release() {if(held_){held_=false;admission_.leave(peer_);}}
+private:
+    Admission& admission_;
+    std::string peer_;
+    bool held_=true;
+};
 template<class Stream>
-net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer) {
+net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer,ConnectionLease& lease) {
     beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     beast::flat_buffer buffer;
     http::request_parser<http::string_body> parser;
@@ -42,7 +90,7 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Work
     auto request=parser.release();
     if(request.target()==RelayPath&&beast::websocket::is_upgrade(request)) {
         if(buffer.size()!=0)co_return false;
-        co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests);co_return true;
+        co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests,[&lease]{lease.release();});co_return true;
     }
     http::response<http::string_body> response{http::status::ok,11};
     response.set(http::field::content_type,"application/json");response.set(http::field::cache_control,"no-store");
@@ -59,23 +107,22 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Work
     co_await http::async_write(stream,response,net::redirect_error(net::use_awaitable,ec));
     co_return false;
 }
-net::awaitable<void> connection(tcp::socket socket,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
-    ConnectionLease lease;
+net::awaitable<void> connection(tcp::socket socket,std::string peer,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
+    ConnectionLease lease(admission,peer);
     try {
-        const auto peer=socket.remote_endpoint().address().to_string();
         if(insecure) {
-            beast::tcp_stream stream(std::move(socket));co_await exchange(stream,service,hub,workers,peer);
+            beast::tcp_stream stream(std::move(socket));co_await exchange(stream,service,hub,workers,peer,lease);
         } else {
             beast::ssl_stream<beast::tcp_stream> stream(std::move(socket),tls);
             beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
             co_await stream.async_handshake(net::ssl::stream_base::server,net::use_awaitable);
-            if(co_await exchange(stream,service,hub,workers,peer))co_return;
+            if(co_await exchange(stream,service,hub,workers,peer,lease))co_return;
             boost::system::error_code ec;
             co_await stream.async_shutdown(net::redirect_error(net::use_awaitable,ec));
         }
     } catch (...) { /* Untrusted transport failures have no credential-bearing diagnostics. */ }
 }
-net::awaitable<void> accept(tcp::acceptor& acceptor,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
+net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
     net::steady_timer pause(acceptor.get_executor());
     while(true) {
         tcp::socket socket(net::make_strand(acceptor.get_executor()));
@@ -89,9 +136,12 @@ net::awaitable<void> accept(tcp::acceptor& acceptor,net::ssl::context& tls,Servi
             }
             continue;
         }
-        if(connections.fetch_add(1)>=128) { --connections;socket.close();continue; }
+        const auto endpoint=socket.remote_endpoint(ec);
+        if(ec)continue;
+        auto peer=endpoint.address().to_string();
+        if(!admission.admit(peer)) {socket.close(ec);continue;}
         auto executor=socket.get_executor();
-        net::co_spawn(executor,connection(std::move(socket),tls,service,hub,workers,insecure),net::detached);
+        net::co_spawn(executor,connection(std::move(socket),std::move(peer),admission,tls,service,hub,workers,insecure),net::detached);
     }
 }
 }
@@ -100,6 +150,7 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     const auto bind=net::ip::make_address(address);
     if(insecureLoopback && !bind.is_loopback())throw Error("INSECURE_BIND_REFUSED");
     if(!insecureLoopback && (certificate.empty()||key.empty()))throw Error("TLS_REQUIRED");
+    raiseDescriptorLimit();
     Service service(database);RelayHub hub;
     net::io_context io(2);net::ssl::context tls(net::ssl::context::tls_server);
     if(SSL_CTX_set_min_proto_version(tls.native_handle(),TLS1_2_VERSION)!=1)throw Error("TLS_REQUIRED");
@@ -109,8 +160,8 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     }
     tcp::acceptor acceptor(io,{bind,port});
     net::signal_set signals(io,SIGINT,SIGTERM);signals.async_wait([&](auto,int){io.stop();});
-    Workers workers;
-    net::co_spawn(io,accept(acceptor,tls,service,hub,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
+    Workers workers;Admission admission;
+    net::co_spawn(io,accept(acceptor,admission,tls,service,hub,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
     std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
     std::jthread worker([&]{io.run();});io.run();worker.join();
     workers.requests.join();workers.signIns.join();

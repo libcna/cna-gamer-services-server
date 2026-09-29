@@ -9,7 +9,7 @@ one.
 Scenarios, each a fixed wall-clock window:
   steady   N signed-in players in a closed loop over the ordinary authenticated mix
   logins   the same players while L more clients sign in continuously (scrypt per login)
-  idle     C connections that open and send nothing, then the steady mix (the connection cap)
+  idle     one address holds C connections that send nothing, during the steady mix
   replay   the steady mix after the title's request-ID table was filled close to its cap
   descriptors  a server limited to 48 descriptors facing 80 idle connections must keep serving
 
@@ -110,12 +110,12 @@ def signer(index, port, ca, players, start, stop, results):
 
 
 def idler(port, count, stop, results):
-    # Connections that never send a request, reopened as the server drops them: one slow or hostile
-    # peer holding connection slots.
+    # Connections that never send a request, all from one address and reopened as the server drops
+    # them: one slow or hostile host holding connection slots.
     import selectors
     def connect(index):
         try:
-            return socket.create_connection(("127.0.0.1", port), timeout=5, source_address=(source(40000 + index % 200), 0))
+            return socket.create_connection(("127.0.0.1", port), timeout=5, source_address=(source(40000), 0))
         except OSError:
             return None
     held = [connect(index) for index in range(count)]
