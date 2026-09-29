@@ -32,9 +32,9 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","session-directory","session-removal","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","session-directory","session-removal","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
@@ -91,6 +91,13 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         Statement s(store_.db(),"INSERT INTO presence(user_id,game_id,mode,text) VALUES(?,?,?,?) ON CONFLICT(user_id,game_id) DO UPDATE SET mode=excluded.mode,text=excluded.text");
         s.bind(1,user);s.bind(2,game);s.bind(3,a["mode"].get<long long>());s.bind(4,stringField(a,"text",256));(void)s.row();return Json::object();
     }
+    if (op=="presence.status") {
+        // Account-wide, like the console's online status; friends see it only while online.
+        const auto status=stringField(a,"status",8);
+        if(status!="online"&&status!="away"&&status!="busy") throw Error("INVALID_ARGUMENT");
+        Statement s(store_.db(),"UPDATE users SET status=? WHERE id=?");s.bind(1,status);s.bind(2,user);(void)s.row();
+        return Json{{"status",status}};
+    }
     if (op=="friends.add" || op=="friends.remove" || op=="friends.accept") {
         Statement target(store_.db(),"SELECT id FROM users WHERE gamertag=?");target.bind(1,stringField(a,"gamertag",32));
         if (!target.row()) throw Error("NOT_FOUND");
@@ -116,7 +123,7 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         (void)s.row();return Json::object();
     }
     if (op=="friends.list") {
-        Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,''),EXISTS(SELECT 1 FROM friends f WHERE f.user_id=? AND f.friend_id=u.id),EXISTS(SELECT 1 FROM friends f WHERE f.friend_id=? AND f.user_id=u.id) FROM users u LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE u.id IN (SELECT friend_id FROM friends WHERE user_id=? UNION SELECT user_id FROM friends WHERE friend_id=?) ORDER BY u.gamertag LIMIT 257");
+        Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,''),EXISTS(SELECT 1 FROM friends f WHERE f.user_id=? AND f.friend_id=u.id),EXISTS(SELECT 1 FROM friends f WHERE f.friend_id=? AND f.user_id=u.id),u.status FROM users u LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE u.id IN (SELECT friend_id FROM friends WHERE user_id=? UNION SELECT user_id FROM friends WHERE friend_id=?) ORDER BY u.gamertag LIMIT 257");
         s.bind(1,timestamp);s.bind(2,timestamp-90);s.bind(3,user);s.bind(4,user);s.bind(5,game);s.bind(6,user);s.bind(7,user);
         Json friends=Json::array();
         while(s.row()) {
@@ -124,6 +131,7 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
             const bool accepted=s.number(5)&&s.number(6), online=accepted&&s.number(2);
             Json row{{"userId",s.text(0)},{"gamertag",s.text(1)},{"online",online},
                 {"presenceMode",online?s.number(3):0},{"presenceText",online?s.text(4):""},
+                {"away",online&&s.text(7)=="away"},{"busy",online&&s.text(7)=="busy"},
                 {"accepted",accepted},{"requestSent",!accepted&&s.number(5)!=0},{"requestReceived",!accepted&&s.number(6)!=0},
                 {"joinable",false},{"inviteReceivedFrom",false},{"inviteSentTo",false},{"inviteAccepted",false},{"inviteRejected",false}};
             if(accepted) {

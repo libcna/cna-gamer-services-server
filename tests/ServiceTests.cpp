@@ -109,6 +109,19 @@ int main() {
             auto friends=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
             check(friends.size()==1&&friends[0]["online"]==true&&friends[0]["presenceText"]=="Playing","friend presence");
             check(friends[0]["accepted"]==true&&!friends[0]["requestSent"].get<bool>(),"accepted flags");
+            check(friends[0]["away"]==false&&friends[0]["busy"]==false,"online status by default");
+            check(call(s,"one","presence.status",{{"status","away"}},bob)["result"]["status"]=="away","status away");
+            friends=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
+            check(friends[0]["away"]==true&&friends[0]["busy"]==false,"friend away");
+            check(call(s,"two","friends.list",Json::object(),other)["result"]["friends"][0]["away"]==true,"status is account-wide");
+            check(call(s,"one","presence.status",{{"status","busy"}},bob)["error"]=="OK","status busy");
+            friends=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
+            check(friends[0]["away"]==false&&friends[0]["busy"]==true,"friend busy");
+            check(call(s,"one","presence.status",{{"status","invisible"}},bob)["error"]=="INVALID_ARGUMENT","unknown status");
+            check(call(s,"one","presence.status",Json::object(),bob)["error"]=="INVALID_ARGUMENT","missing status");
+            check(call(s,"one","presence.status",{{"status","online"}},bob)["error"]=="OK","status online");
+            friends=call(s,"one","friends.list",Json::object(),alice)["result"]["friends"];
+            check(friends[0]["away"]==false&&friends[0]["busy"]==false,"friend online again");
             check(call(s,"two","friends.list",Json::object(),other)["result"]["friends"][0]["presenceText"]=="","title presence isolation");
             check(call(s,"one","friends.remove",{{"gamertag","Alice"}},bob)["error"]=="OK","mutual removal");
             check(call(s,"one","friends.list",Json::object(),alice)["result"]["friends"].empty(),"removed both directions");
@@ -206,7 +219,7 @@ int main() {
             for(int i=0;i<6;++i)check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="UNAUTHENTICATED","refresh throttle threshold");
             check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="RATE_LIMITED","refresh source rate limit");
         }
-        {Store db(path.string());db.exec("DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
+        {Store db(path.string());db.exec("ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==SchemaVersion,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}
         {Store db(path.string());db.exec(("PRAGMA user_version="+std::to_string(SchemaVersion+1)).c_str());}
         bool refused=false;try{Store future(path.string());}catch(const Error& e){refused=e.code()=="UNSUPPORTED_DATABASE_VERSION";}
