@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
 #include <openssl/crypto.h>
+#include <cmath>
 #include <set>
 
 namespace CnaService {
@@ -17,7 +18,7 @@ std::string Service::handle(std::string_view bytes,std::string_view peer) {
       catch (...) { return response(id,"INTERNAL_ERROR").dump(); }
 }
 Json Service::identity(const std::string& id) {
-    Statement s(store_.db(),"SELECT id,gamertag,motto,region,online_allowed,picture FROM users WHERE id=?");s.bind(1,id);
+    Statement s(store_.db(),"SELECT id,gamertag,motto,region,online_allowed,picture,gamer_zone FROM users WHERE id=?");s.bind(1,id);
     if (!s.row()) throw Error("NOT_FOUND");
     Statement score(store_.db(),"SELECT COALESCE(SUM(a.score),0),COUNT(*) FROM earned e JOIN achievements a ON a.game_id=e.game_id AND a.key=e.key WHERE e.user_id=?");
     score.bind(1,id);(void)score.row();
@@ -25,16 +26,22 @@ Json Service::identity(const std::string& id) {
     Statement titles(store_.db(),"SELECT COUNT(*) FROM (SELECT game_id FROM presence WHERE user_id=?1 UNION "
         "SELECT game_id FROM earned WHERE user_id=?1 UNION SELECT game_id FROM leaderboard_entries WHERE user_id=?1)");
     titles.bind(1,id);(void)titles.row();
-    return Json{{"userId",s.text(0)},{"gamertag",s.text(1)},{"displayName",s.text(1)},{"motto",s.text(2)},
+    Json result{{"userId",s.text(0)},{"gamertag",s.text(1)},{"displayName",s.text(1)},{"motto",s.text(2)},
         {"region",s.text(3)},{"allowOnlineSessions",s.number(4)!=0},{"gamerScore",score.number(0)},{"totalAchievements",score.number(1)},
-        {"titlesPlayed",titles.number(0)},{"picture",s.text(5)}};
+        {"titlesPlayed",titles.number(0)},{"picture",s.text(5)},{"gamerZone",s.text(6)}};
+    // XNA GamerProfile.Reputation, 0 to 5 stars: the share of other players who would play with
+    // this member again, in quarter stars. Only reviews make a reputation; without any, none is sent.
+    Statement reviews(store_.db(),"SELECT COALESCE(SUM(rating='prefer'),0),COUNT(*) FROM player_reviews WHERE subject_id=?");
+    reviews.bind(1,id);(void)reviews.row();
+    if(reviews.number(1)>0)result["reputation"]=std::round(20.0*reviews.number(0)/reviews.number(1))/4.0;
+    return result;
 }
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     std::string user;
@@ -100,6 +107,13 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
         } else if(!a.empty())throw Error("INVALID_ARGUMENT");
         Statement read(store_.db(),"SELECT game_defaults FROM users WHERE id=?");read.bind(1,user);(void)read.row();
         return Json{{"gameDefaults",parse(read.text(0))}};
+    }
+    if (op=="profile.setGamerZone") {
+        // The member's own choice; "unknown" clears it.
+        const auto zone=stringField(a,"gamerZone",16);
+        if(zone!="unknown"&&zone!="recreation"&&zone!="pro"&&zone!="family"&&zone!="underground")throw Error("INVALID_ARGUMENT");
+        Statement update(store_.db(),"UPDATE users SET gamer_zone=? WHERE id=?");update.bind(1,zone);update.bind(2,user);(void)update.row();
+        return identity(user);
     }
     if (op=="presence.status") {
         // Account-wide, like the console's online status; friends see it only while online.

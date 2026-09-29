@@ -20,6 +20,7 @@
 #include "PresenceStatusMigration.hpp"
 #include "HostMigrationMigration.hpp"
 #include "GameDefaultsMigration.hpp"
+#include "GamerZoneMigration.hpp"
 #include "SessionRemovalMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -125,6 +126,7 @@ Store::Store(const std::string& path) {
         if(current<15){exec("BEGIN IMMEDIATE");exec(PresenceStatusMigration);exec("COMMIT");}
         if(current<16){exec("BEGIN IMMEDIATE");exec(HostMigrationMigration);exec("COMMIT");}
         if(current<17){exec("BEGIN IMMEDIATE");exec(GameDefaultsMigration);exec("COMMIT");}
+        if(current<18){exec("BEGIN IMMEDIATE");exec(GamerZoneMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

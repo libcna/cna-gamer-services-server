@@ -61,6 +61,18 @@ int main() {
         check(call(service,"reviews.submit",{{"gamertag","Bob"},{"rating","avoid"}},tokens[1])["error"]=="INVALID_ARGUMENT","no self review");
         check(call(service,"reviews.submit",{{"gamertag","Nobody"},{"rating","avoid"}},tokens[1])["error"]=="NOT_FOUND","unknown subject");
         check(call(service,"reviews.submit",{{"gamertag","Alice"},{"rating","meh"}},tokens[1])["error"]=="INVALID_ARGUMENT","rating vocabulary");
+        // XNA GamerProfile.Reputation: stars from other players' reviews, none without reviews.
+        auto profile=[&](const char* tag){return call(service,"profile.get",{{"gamertag",tag}},tokens[2])["result"];};
+        check(!profile("Alice").contains("reputation"),"no reviews, no reputation");
+        check(call(service,"reviews.submit",{{"gamertag","Alice"},{"rating","prefer"}},tokens[1])["error"]=="OK","one prefer");
+        check(profile("Alice")["reputation"]==5.0,"all prefer: five stars");
+        check(call(service,"reviews.submit",{{"gamertag","Alice"},{"rating","avoid"}},tokens[2])["error"]=="OK","one avoid");
+        check(profile("Alice")["reputation"]==2.5,"half prefer: two and a half stars");
+        // GamerZone: the member's own choice.
+        check(profile("Alice")["gamerZone"]=="unknown","no zone chosen");
+        check(call(service,"profile.setGamerZone",{{"gamerZone","family"}},tokens[0])["result"]["gamerZone"]=="family","zone chosen");
+        check(profile("Alice")["gamerZone"]=="family","others see the zone");
+        check(call(service,"profile.setGamerZone",{{"gamerZone","hardcore"}},tokens[0])["error"]=="INVALID_ARGUMENT","zone vocabulary");
         clean();std::cout<<"social "<<checks<<" assertions passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<"social test failed: "<<error.what()<<"\n";clean();return 1;}
 }
