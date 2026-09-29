@@ -178,6 +178,20 @@ def main():
                 environment = os.environ.copy()
                 environment.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(ca), CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0", CNA_GAMER_SERVICES_CACHE_DIR=str(root/"cache"),CNA_GAMER_SERVICES_CREDENTIALS_DIR="0")
                 environment.pop("DISPLAY", None); environment.pop("WAYLAND_DISPLAY", None)
+                # GSX-E6: a message Bob sends reaches Alice's Guide through the event channel, well
+                # inside the 15 s interval of her client's next read.
+                process = subprocess.Popen([client, "--real", "alice", "earned", "push-wait"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=environment)
+                try:
+                    process.stdin.write("alice-password\n");process.stdin.flush()
+                    assert line_with_timeout(process.stdout).strip()=="READY_PUSH", "CNA push coordination failed"
+                    bob=request(url,str(ca),"one","auth.login",{"username":"bob","password":"bob-password"})["result"]
+                    assert request(url,str(ca),"one","messages.send",{"gamertags":["Alice"],"text":"pushed"},bob["token"])["error"]=="OK"
+                    process.stdin.write("continue\n");process.stdin.flush()
+                    output, _ = process.communicate(timeout=30)
+                    assert process.returncode==0, "CNA push client failed: "+output
+                    print(output.strip())
+                finally:
+                    if process.poll() is None: process.kill();process.wait()
                 for user, action, ready in (("bob", "presence-wait", "READY_PRESENCE"), ("alice", "revoke-wait", "READY_REVOKE")):
                     process = subprocess.Popen([client, "--real", user, "none" if user=="bob" else "earned", action], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=environment)
                     try:
