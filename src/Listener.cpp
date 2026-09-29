@@ -19,11 +19,19 @@ namespace http=beast::http;
 using tcp=net::ip::tcp;
 namespace {
 std::atomic<int> connections{0};
-// Bounds concurrent sign-in derivations (32 MiB of scrypt memory each) as well as storage work.
-constexpr std::size_t ServiceWorkerThreads=4;
+// Storage work runs on its own threads, and sign-in on two more: a burst of scrypt derivations
+// (tens of milliseconds and 32 MiB each) then never queues ordinary requests behind it.
+struct Workers {
+    net::thread_pool requests{4};
+    net::thread_pool signIns{2};
+};
+bool signIn(std::string_view body) {
+    try {const auto request=parse(body);return request.is_object()&&request.contains("op")&&request["op"]=="auth.login";}
+    catch(...) {return false;}
+}
 struct ConnectionLease { ~ConnectionLease(){--connections;} };
 template<class Stream>
-net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,net::thread_pool& workers,const std::string& peer) {
+net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer) {
     beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     beast::flat_buffer buffer;
     http::request_parser<http::string_body> parser;
@@ -34,7 +42,7 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,net:
     auto request=parser.release();
     if(request.target()==RelayPath&&beast::websocket::is_upgrade(request)) {
         if(buffer.size()!=0)co_return false;
-        co_await serveRelay(std::move(stream),std::move(request),service,hub,workers);co_return true;
+        co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests);co_return true;
     }
     http::response<http::string_body> response{http::status::ok,11};
     response.set(http::field::content_type,"application/json");response.set(http::field::cache_control,"no-store");
@@ -44,13 +52,14 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,net:
     } else {
         // Storage and sign-in derivation block; they run on the worker pool so these network
         // threads keep accepting, handshaking and forwarding relay datagrams meanwhile.
-        response.body()=co_await net::co_spawn(workers,[&]()->net::awaitable<std::string>{co_return service.handle(request.body(),peer);},net::use_awaitable);
+        auto& pool=signIn(request.body())?workers.signIns:workers.requests;
+        response.body()=co_await net::co_spawn(pool,[&]()->net::awaitable<std::string>{co_return service.handle(request.body(),peer);},net::use_awaitable);
     }
     response.prepare_payload();
     co_await http::async_write(stream,response,net::redirect_error(net::use_awaitable,ec));
     co_return false;
 }
-net::awaitable<void> connection(tcp::socket socket,net::ssl::context& tls,Service& service,RelayHub& hub,net::thread_pool& workers,bool insecure) {
+net::awaitable<void> connection(tcp::socket socket,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
     ConnectionLease lease;
     try {
         const auto peer=socket.remote_endpoint().address().to_string();
@@ -66,7 +75,7 @@ net::awaitable<void> connection(tcp::socket socket,net::ssl::context& tls,Servic
         }
     } catch (...) { /* Untrusted transport failures have no credential-bearing diagnostics. */ }
 }
-net::awaitable<void> accept(tcp::acceptor& acceptor,net::ssl::context& tls,Service& service,RelayHub& hub,net::thread_pool& workers,bool insecure) {
+net::awaitable<void> accept(tcp::acceptor& acceptor,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
     net::steady_timer pause(acceptor.get_executor());
     while(true) {
         tcp::socket socket(net::make_strand(acceptor.get_executor()));
@@ -100,10 +109,10 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     }
     tcp::acceptor acceptor(io,{bind,port});
     net::signal_set signals(io,SIGINT,SIGTERM);signals.async_wait([&](auto,int){io.stop();});
-    net::thread_pool workers(ServiceWorkerThreads);
+    Workers workers;
     net::co_spawn(io,accept(acceptor,tls,service,hub,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
     std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
     std::jthread worker([&]{io.run();});io.run();worker.join();
-    workers.join();
+    workers.requests.join();workers.signIns.join();
 }
 }
