@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <sqlite3.h>
 #include "CnaService/Service.hpp"
 #include <filesystem>
 #include <iostream>
@@ -111,6 +112,8 @@ int main() {
         {Store admin(path.string());admin.exec("ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
         check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"legacy ranked flag cannot expose gameplay");
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","legacy ranked flag cannot allow gameplay join");
+        // A real schema 8 database has no allow_migration either; the running service above still needed it.
+        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK&&sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration",nullptr,nullptr,nullptr)==SQLITE_OK,"legacy schema without host migration");sqlite3_close(raw);}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==SchemaVersion,"ranked policy schema upgrade");}
         auto migrated=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];
         check(migrated["allowJoinInProgress"]==false&&migrated["revision"]==priorRevision+1,"migration repairs flag and revision");
@@ -148,6 +151,50 @@ int main() {
             check(call(service,"sessions.get",{{"session",hostedId}},tokens[3])["error"]=="OK","other machine unaffected");
             check(call(service,"sessions.get",{{"session",hostedId}},tokens[4])["error"]=="NOT_AUTHORIZED","never-member still NOT_AUTHORIZED");
             check(call(service,"sessions.leave",{{"session",hostedId}},tokens[0])["result"]["ended"]==true,"cleanup removal fixture");
+        }
+        // XNA AllowHostMigration: the service hands a session to the machine with the lowest remaining
+        // ordinal when its host leaves or its lease lapses; without it the session ends as before.
+        {
+            Json migrating{{"kind","player"},{"maxGamers",8},{"privateSlots",0},{"properties",properties},{"allowJoinInProgress",true},
+                {"allowHostMigration",true},{"participants",Json::array({tokens[0]})}};
+            auto created=call(service,"sessions.create",migrating,tokens[0]);
+            check(created["error"]=="OK"&&created["result"]["allowHostMigration"]==true,"migration-enabled create");
+            const auto hostedId=created["result"]["session"].get<std::string>();
+            auto search=find;search["kind"]="player";
+            auto advertised=call(service,"sessions.find",search,tokens[4])["result"]["sessions"];
+            check(!advertised.empty()&&!advertised[0].contains("allowHostMigration"),"search results never carry the flag");
+            auto second=call(service,"sessions.join",{{"session",hostedId},{"participants",Json::array({tokens[1],tokens[2]})}},tokens[1]);
+            auto third=call(service,"sessions.join",{{"session",hostedId},{"participants",Json::array({tokens[3]})}},tokens[3]);
+            check(second["error"]=="OK"&&third["error"]=="OK"&&second["result"]["allowHostMigration"]==true,"joiners see the flag");
+            const auto secondMachine=second["result"]["machine"].get<std::string>(),thirdMachine=third["result"]["machine"].get<std::string>();
+            const auto before=call(service,"sessions.get",{{"session",hostedId}},tokens[3])["result"]["revision"].get<long long>();
+            auto left=call(service,"sessions.leave",{{"session",hostedId}},tokens[0]);
+            check(left["error"]=="OK"&&left["result"]["ended"]==false,"a leaving host hands the session over");
+            auto handed=call(service,"sessions.get",{{"session",hostedId}},tokens[3])["result"];
+            check(handed["hostMachine"]==secondMachine&&handed["hostId"]==second["result"]["members"][1]["userId"]&&handed["hostGamertag"]=="bob","lowest remaining ordinal hosts");
+            check(handed["members"].size()==3&&handed["revision"].get<long long>()>before,"the old host's gamers leave with a new revision");
+            check(call(service,"sessions.get",{{"session",hostedId}},tokens[0])["error"]=="NOT_AUTHORIZED","the old host is no member");
+            Json update{{"session",hostedId},{"revision",handed["revision"]},{"maxGamers",8},{"privateSlots",0},{"properties",properties},
+                {"state","lobby"},{"allowJoinInProgress",true}};
+            check(call(service,"sessions.update",update,tokens[3])["error"]=="NOT_AUTHORIZED","other members still cannot update");
+            auto updated=call(service,"sessions.update",update,tokens[1]);
+            check(updated["error"]=="OK"&&updated["result"]["allowHostMigration"]==true,"the new host updates; leaving the flag out keeps it");
+            // A lapsed host lease (a crash) hands over too, at the next directory read.
+            {Store admin(path.string());Statement lapse(admin.db(),"UPDATE directory_machines SET expires=0 WHERE id=?");lapse.bind(1,secondMachine);(void)lapse.row();}
+            auto recovered=call(service,"sessions.get",{{"session",hostedId}},tokens[3])["result"];
+            check(recovered["hostMachine"]==thirdMachine&&recovered["hostGamertag"]=="dana"&&recovered["members"].size()==1,"a lost host is replaced");
+            update["revision"]=recovered["revision"];update["allowHostMigration"]=false;
+            check(call(service,"sessions.update",update,tokens[3])["result"].contains("allowHostMigration")==false,"the host turns migration off");
+            check(call(service,"sessions.leave",{{"session",hostedId}},tokens[3])["result"]["ended"]==true,"without migration the host's leaving ends it");
+            // The last machine of a migrating session ends it when its host leaves.
+            migrating["participants"]=Json::array({tokens[0]});
+            const auto alone=call(service,"sessions.create",migrating,tokens[0])["result"]["session"].get<std::string>();
+            check(call(service,"sessions.leave",{{"session",alone}},tokens[0])["result"]["ended"]==true,"nobody to hand over to");
+            Json legacy=migrating;legacy.erase("allowHostMigration");
+            auto plain=call(service,"sessions.create",legacy,tokens[0]);
+            check(plain["error"]=="OK"&&!plain["result"].contains("allowHostMigration"),"clients that predate the flag create as before");
+            check(call(service,"sessions.leave",{{"session",plain["result"]["session"].get<std::string>()}},tokens[0])["result"]["ended"]==true,"cleanup");
+            legacy["allowHostMigration"]="yes";check(call(service,"sessions.create",legacy,tokens[0])["error"]=="INVALID_ARGUMENT","boolean flag");
         }
         for(const auto& bad:{Json(0),Json(5),Json(-1),Json(18446744073709551615ULL),Json(1.5),Json(true)}) {
             auto request=find;request["localCount"]=bad;check(call(service,"sessions.find",request,tokens[1])["error"]=="INVALID_ARGUMENT","bounded search locals");

@@ -75,9 +75,13 @@ int main() {
         check(hostTicket()["error"]=="NOT_AUTHORIZED","revoked family cannot mint despite old access token");
         credentials[2]=call(*service,"auth.login",{{"username","charlie"},{"password","charlie-password"}})["result"];
         check(hostTicket()["error"]=="OK","fresh confirmed sign-in can mint");
+        auto lease=[&]{Store store(path.string());Statement read(store.db(),"SELECT expires FROM directory_machines WHERE id=?");
+            read.bind(1,grant.machine);(void)read.row();return read.number(0);};
         service->releaseRelayGrant(grant);check(!service->validateRelayGrant(grant),"released grant gone");
+        check(lease()<=now()+20,"a machine off the relay keeps its lease only for the reconnect grace");
         auto second=hostTicket()["result"]["ticket"].get<std::string>();auto secondGrant=service->redeemRelayTicket("one",second);
         check(service->validateRelayGrant(secondGrant),"fresh full-group grant");
+        check(lease()>=now()+85,"back on the relay, the machine holds its lease again");
         {Store store(path.string());Statement deny(store.db(),"UPDATE users SET online_allowed=0 WHERE username='charlie'");(void)deny.row();}
         check(!service->validateRelayGrant(secondGrant),"online privilege loss invalidates grant");
         {Store store(path.string());store.exec("UPDATE users SET online_allowed=1 WHERE username='charlie'");}

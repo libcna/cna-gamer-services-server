@@ -5,6 +5,8 @@
 #include <set>
 namespace CnaService {
 namespace {
+// Longer than a client's relay recovery window (15 s), so a reconnect keeps the machine.
+constexpr int RelayLossGraceSeconds=20;
 bool hexId(const std::string& value,std::size_t size) {
     return value.size()==size&&value.find_first_not_of("0123456789abcdef")==std::string::npos;
 }
@@ -82,7 +84,10 @@ RelayGrant Service::redeemRelayTicket(const std::string& game,const std::string&
     current.bind(1,hash);current.bind(2,game);if(!current.row())throw Error("UNAUTHENTICATED");
     RelayGrant grant{hash,game,current.text(0),current.text(1),current.text(2)};
     if(!validateRelayGrantLocked(grant,false))throw Error("UNAUTHENTICATED");
-    Statement used(store_.db(),"UPDATE relay_tickets SET used=1 WHERE hash=? AND used=0");used.bind(1,hash);(void)used.row();transaction.commit();return grant;
+    Statement used(store_.db(),"UPDATE relay_tickets SET used=1 WHERE hash=? AND used=0");used.bind(1,hash);(void)used.row();
+    // A machine back on the relay holds its lease again (releaseRelayGrant cut it short).
+    Statement lease(store_.db(),"UPDATE directory_machines SET expires=MAX(expires,?) WHERE id=?");lease.bind(1,now()+90);lease.bind(2,grant.machine);(void)lease.row();
+    transaction.commit();return grant;
 }
 bool Service::validateRelayGrant(const RelayGrant& grant) {
     std::lock_guard lock(mutex_);pruneDirectory();pruneRelayTickets();return validateRelayGrantLocked(grant,true);
@@ -91,5 +96,10 @@ void Service::releaseRelayGrant(const RelayGrant& grant) {
     std::lock_guard lock(mutex_);
     Statement remove(store_.db(),"DELETE FROM relay_tickets WHERE hash=? AND game_id=? AND session_id=? AND machine_id=? AND owner_id=? AND used=1");
     remove.bind(1,grant.ticketHash);remove.bind(2,grant.game);remove.bind(3,grant.session);remove.bind(4,grant.machine);remove.bind(5,grant.owner);(void)remove.row();
+    // Every session peer talks through the relay, so a machine off it for longer than a client's
+    // relay recovery takes is gone: a crashed host is handed over (or its session closed) within
+    // RelayLossGraceSeconds instead of the 90-second lease.
+    Statement lease(store_.db(),"UPDATE directory_machines SET expires=MIN(expires,?) WHERE id=? AND session_id=? AND owner_id=?");
+    lease.bind(1,now()+RelayLossGraceSeconds);lease.bind(2,grant.machine);lease.bind(3,grant.session);lease.bind(4,grant.owner);(void)lease.row();
 }
 }

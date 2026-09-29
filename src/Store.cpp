@@ -14,6 +14,7 @@
 #include "AvatarMigration.hpp"
 #include "AvatarFeatureMigration.hpp"
 #include "PresenceStatusMigration.hpp"
+#include "HostMigrationMigration.hpp"
 #include "SessionRemovalMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -117,6 +118,7 @@ Store::Store(const std::string& path) {
         if(current<13){exec("BEGIN IMMEDIATE");exec(SessionRemovalMigration);exec("COMMIT");}
         if(current<14){exec("BEGIN IMMEDIATE");exec(AvatarFeatureMigration);exec("COMMIT");}
         if(current<15){exec("BEGIN IMMEDIATE");exec(PresenceStatusMigration);exec("COMMIT");}
+        if(current<16){exec("BEGIN IMMEDIATE");exec(HostMigrationMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

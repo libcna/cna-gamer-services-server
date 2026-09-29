@@ -41,6 +41,7 @@ private:
     Json directorySnapshot(const std::string& id,bool includeMembers);
     std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args);
     void pruneDirectory();
+    bool migrateDirectoryHost(const std::string& session,const std::string& departing);
     Json invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args);
     Json avatars(const std::string& user,const std::string& op,const Json& args,long long now);
     Json invitationSnapshot(const std::string& id);

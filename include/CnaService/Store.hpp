@@ -33,7 +33,7 @@ private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 15;
+inline constexpr long long SchemaVersion = 16;
 /** @brief Persistent service database with transactional versioned migration. */
 class Store {
 public:

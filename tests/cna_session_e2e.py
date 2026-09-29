@@ -5,10 +5,14 @@ import os, pathlib, selectors, shutil, socket, subprocess, sys, tempfile, time
 
 def main():
     flags=sys.argv[2:]
-    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart"},"test arguments"
+    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart","--migrate","--crash"},"test arguments"
     isolated="--isolated" in flags
     invite="--invite" in flags
     restart="--restart" in flags
+    # Host migration: the host allows it, then leaves (--migrate) or is killed (--crash).
+    migrate="--migrate" in flags
+    crash="--crash" in flags
+    variant="invite" if invite else "crash" if crash else "migrate" if migrate else None
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
@@ -75,7 +79,7 @@ def main():
             env=os.environ.copy();env.pop("DISPLAY",None);env["WAYLAND_DISPLAY"]=""
             env.update(CNA_GAMER_SERVICES_ENDPOINT=url,CNA_GAME_ID=game,CNA_GAMER_SERVICES_CA_BUNDLE=str(cert),
                 CNA_GAMER_SERVICES_CREDENTIALS_DIR="0",CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0")
-            arguments=[client,role,kind]+(["invite"] if invite else [])
+            arguments=[client,role,kind]+([variant] if variant else [])
             if isolated:
                 env["CNA_GAMER_SERVICES_ENDPOINT"]=url.replace("localhost","10.0.2.2")
                 arguments=["unshare","--user","--map-root-user","--net",sys.executable,
@@ -129,7 +133,14 @@ def main():
                 allowed={"session-exchanged 6"} if not restart else {"session-exchanged 6","session-exchanged 5"}
                 assert set(exchanged)<=allowed,"verified deliveries each way: "+str(exchanged)
                 proceed(host,join);both("session-playing");proceed(host,join);both("session-lobby")
-                if kind=="player":
+                if migrate or crash:
+                    if crash:
+                        # No leave, no relay close handshake: the service notices the dead relay.
+                        host.kill();host.wait()
+                    else:
+                        proceed(host);print(done(host))
+                    proceed(join);read(join,"session-migrated");print(done(join))
+                elif kind=="player":
                     proceed(join);print(done(join));proceed(host);print(done(host))
                 else:
                     proceed(host);print(done(host));proceed(join);print(done(join))
@@ -141,6 +152,7 @@ def main():
                     "reliable packets incl. 32KiB each way (in-order unreliable best-effort after the restart)," if restart else "six verified packets each way incl. 32KiB and in-order,",
                     "host properties/join-in-progress and StartGame/EndGame observed remotely, per-machine EndGame leaderboard commits read back by both,",
                     "Ranked arbitrated rows from both machines resolved by agreement," if kind=="ranked" else "",
+                    "host killed -> the joiner hosts (HostChanged)" if crash else "host leave -> the joiner hosts (HostChanged)" if migrate else
                     "client leave -> GamerLeft" if kind=="player" else "host leave -> SessionEnded(HostEndedSession)")
             if isolated:
                 assert len(namespace_ids)==4,"two separate NAT clients per category"
