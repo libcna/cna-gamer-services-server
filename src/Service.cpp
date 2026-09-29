@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
+#include <algorithm>
 #include <openssl/crypto.h>
 #include <cmath>
 #include <set>
@@ -40,15 +41,36 @@ private:
 Service::Service(const std::string& database):store_(database) {store_.exec("PRAGMA synchronous=NORMAL");}
 std::string Service::handle(std::string_view bytes,std::string_view peer) {
     std::string id,code="OK",result;
+    std::vector<std::pair<std::string,std::string>> hints;
+    std::function<void(const std::string&,const std::string&)> sink;
     try {
         const auto request=parse(bytes);validateRequest(request);id=stringField(request,"id",64);
         std::unique_lock lock(mutex_);
+        hints_.clear();
         result=response(id,"OK",dispatch(request,std::string(peer),lock)).dump();
         if (result.size()>MaxMessageBytes) throw Error("LIMIT_EXCEEDED");
+        // Only a request that succeeded tells anyone; the sink runs after the lock is released.
+        hints.swap(hints_);sink=hintSink_;
     } catch (const Error& e) { code=e.code();result=response(id,code).dump(); }
       catch (...) { code="INTERNAL_ERROR";result=response(id,code).dump(); }
+    if(sink)for(const auto& [user,topic]:hints){try{sink(user,topic);}catch(...){}}
     std::lock_guard counting(outcomesMutex_);++outcomes_[code];
     return result;
+}
+void Service::setHintSink(std::function<void(const std::string& user,const std::string& topic)> sink) {
+    std::lock_guard lock(mutex_);hintSink_=std::move(sink);
+}
+void Service::hint(const std::string& user,const char* topic) {
+    if(hints_.size()<256&&std::find(hints_.begin(),hints_.end(),std::pair<std::string,std::string>{user,topic})==hints_.end())
+        hints_.emplace_back(user,topic);
+}
+std::string Service::eventAccount(std::string_view game,std::string_view token) {
+    if(!identifier(std::string(game))||token.size()!=64)throw Error("UNAUTHENTICATED");
+    std::unique_lock lock(mutex_);
+    Statement session(store_.db(),"SELECT user_id FROM sessions WHERE hash=? AND game_id=? AND expires>?");
+    session.bind(1,sha256(token));session.bind(2,std::string(game));session.bind(3,now());
+    if(!session.row())throw Error("UNAUTHENTICATED");
+    return session.text(0);
 }
 Service::File Service::file(std::string_view game,std::string_view token,std::string_view hash) {
     // One account may download this much an hour: dozens of complete catalogs, far below what a
@@ -120,7 +142,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     const auto& a=r["args"];
     static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","invites.joinFriend","parties.get","parties.invite","parties.accept","parties.decline","parties.leave","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id,minimum_version FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     // A title may stop accepting old game versions (XNA GameUpdateRequiredException); a client that
@@ -267,7 +289,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
             "INSERT OR IGNORE INTO friends(user_id,friend_id) VALUES(?,?)");
         s.bind(1,user);s.bind(2,friendId);
         if(op=="friends.remove"){s.bind(3,friendId);s.bind(4,user);}
-        (void)s.row();return Json::object();
+        (void)s.row();hint(friendId,"friends");return Json::object();
     }
     if (op=="friends.list") {
         Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,''),EXISTS(SELECT 1 FROM friends f WHERE f.user_id=? AND f.friend_id=u.id),EXISTS(SELECT 1 FROM friends f WHERE f.friend_id=? AND f.user_id=u.id),u.status FROM users u LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE u.id IN (SELECT friend_id FROM friends WHERE user_id=? UNION SELECT user_id FROM friends WHERE friend_id=?) ORDER BY u.gamertag LIMIT 257");
@@ -341,6 +363,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
             for(const auto& recipient:recipients) {
                 Statement insert(store_.db(),"INSERT INTO messages(id,sender_id,recipient_id,text,created) VALUES(?,?,?,?,?)");
                 insert.bind(1,randomHex(16));insert.bind(2,user);insert.bind(3,recipient);insert.bind(4,text);insert.bind(5,timestamp);(void)insert.row();
+                hint(recipient,"messages");
             }
             store_.exec("COMMIT");
         }catch(...){store_.exec("ROLLBACK");throw;}

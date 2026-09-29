@@ -71,7 +71,7 @@ Json Service::invitations(const std::string& user,const std::string& game,const 
         const auto invite=randomHex(16);
         Statement insert(store_.db(),"INSERT INTO session_invitations(id,game_id,session_id,sender_id,recipient_id,created,expires) VALUES(?,?,?,?,?,?,?)");
         insert.bind(1,invite);insert.bind(2,game);insert.bind(3,session);insert.bind(4,user);insert.bind(5,recipient);insert.bind(6,timestamp);insert.bind(7,timestamp+InviteLifetimeSeconds);(void)insert.row();
-        auto result=invitationSnapshot(invite);transaction.commit();return result;
+        auto result=invitationSnapshot(invite);transaction.commit();hint(recipient,"invitations");return result;
     }
     if(op=="invites.joinFriend") {
         // Joining a friend's or party member's game from the Guide: an invitation the friend's

@@ -148,6 +148,38 @@ async def exercise(build,root,db,cert,key,game,kind,url,all_credentials):
     print(kind,'verified WSS transport checks',checks,flush=True)
 
 
+async def events(cert,url,credentials):
+    """GSX-E: the account event channel. Hints reach every channel of the changed account, only
+    after the change succeeded, and a bad hello is refused."""
+    context=ssl.create_default_context(cafile=cert)
+    endpoint=url.replace('https:','wss:')+'/events'
+    alice,bob=credentials['one']['alice'],credentials['one']['bob']
+    async def channel(token,game='one'):
+        ws=await websockets.connect(endpoint,ssl=context,compression=None,proxy=None,ping_interval=None,close_timeout=3)
+        await ws.send(json.dumps({'v':1,'id':'events','game':game,'token':token}))
+        return ws,json.loads(await asyncio.wait_for(ws.recv(),5))
+    ws,welcome=await channel(alice['token'])
+    check(welcome['error']=='OK' and welcome['id']=='events' and 'messages' in welcome['result']['topics'])
+    # The same account in another title hears account-wide news too.
+    other,welcome=await channel(credentials['two']['alice']['token'],'two');check(welcome['error']=='OK')
+    check(request(url,cert,'one','messages.send',{'gamertags':['Alice'],'text':'hint'},bob['token'])['error']=='OK')
+    for connection in (ws,other):
+        hint=json.loads(await asyncio.wait_for(connection.recv(),5));check(hint['v']==1 and 'messages' in hint['topics'])
+    check(request(url,cert,'one','messages.send',{'gamertags':['Alice','Alice'],'text':'x'},bob['token'])['error']=='INVALID_ARGUMENT')
+    check(request(url,cert,'one','friends.add',{'gamertag':'Alice'},bob['token'])['error']=='OK')
+    hint=json.loads(await asyncio.wait_for(ws.recv(),5));check(hint['topics']==['friends'])
+    await ws.close();await other.close()
+    # A wrong token, a wrong title for the token, or a malformed hello closes the channel.
+    for token,game in (('0'*64,'one'),(alice['token'],'two')):
+        ws=await websockets.connect(endpoint,ssl=context,compression=None,proxy=None,ping_interval=None,close_timeout=3)
+        await ws.send(json.dumps({'v':1,'id':'bad','game':game,'token':token}))
+        try:await asyncio.wait_for(ws.recv(),5);check(False)
+        except websockets.ConnectionClosed:check(True)
+    ws=await websockets.connect(endpoint,ssl=context,compression=None,proxy=None,ping_interval=None,close_timeout=3)
+    await ws.send('not json')
+    try:await asyncio.wait_for(ws.recv(),5);check(False)
+    except websockets.ConnectionClosed:check(True)
+
 def main():
     build=pathlib.Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix='cna-relay-',dir=build) as temp:
@@ -166,6 +198,7 @@ def main():
                     result=request(url,cert,game,'auth.login',{'username':name,'password':name+'-password'})
                     check(result['error']=='OK');credentials[game][name]=result['result']
             for game,kind in (('one','player'),('two','ranked')):asyncio.run(exercise(build,root,db,cert,key,game,kind,url,credentials))
+            asyncio.run(events(cert,url,credentials))
             check(server.poll() is None)
             print('Verified WSS forwarding/security passed',checks,'checks. No CNA ENet or Internet multiplayer claim.')
         finally:

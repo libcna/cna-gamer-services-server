@@ -52,7 +52,7 @@ add_library(cna_service src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Pro
 target_include_directories(cna_service PUBLIC include protocol/include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(cna_service PUBLIC OpenSSL::Crypto SQLite::SQLite3 nlohmann_json::nlohmann_json)
 target_compile_options(cna_service PRIVATE -Wall -Wextra -Wpedantic -Werror)
-add_executable(cna-gamer-services-server src/Main.cpp src/Listener.cpp src/RelayListener.cpp src/RelayFlow.cpp src/RelayHub.cpp)
+add_executable(cna-gamer-services-server src/Main.cpp src/Listener.cpp src/RelayListener.cpp src/EventListener.cpp src/RelayFlow.cpp src/RelayHub.cpp)
 target_link_libraries(cna-gamer-services-server PRIVATE cna_service OpenSSL::SSL Boost::headers Threads::Threads)
 target_compile_options(cna-gamer-services-server PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(cna-gamer-services-admin src/Admin.cpp)

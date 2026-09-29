@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
+#include <algorithm>
 #include <array>
 #include <tuple>
 #include <filesystem>
@@ -26,11 +27,22 @@ int main() {
             auto login=call(service,"auth.login",{{"username",name},{"password",std::string(name)+"-password"}},{});
             check(login["error"]=="OK","fixture authentication");tokens[index++]=login["result"]["token"].get<std::string>();
         }
+        // Push hints: after a request succeeds, each other account it changed, with the topic.
+        std::vector<std::pair<std::string,std::string>> hints;
+        service.setHintSink([&](const std::string& user,const std::string& topic){hints.emplace_back(user,topic);});
+        auto idOf=[&](const char* tag){return call(service,"gamer.lookup",{{"gamertag",tag}},tokens[0])["result"]["userId"].get<std::string>();};
+        const auto aliceId=idOf("Alice"),bobId=idOf("Bob"),charlieId=idOf("Charlie");
+        auto hinted=[&](std::vector<std::pair<std::string,std::string>> expected){
+            auto seen=hints;hints.clear();std::sort(seen.begin(),seen.end());std::sort(expected.begin(),expected.end());return seen==expected;
+        };
         const auto capabilities=call(service,"hello",Json::object(),{})["result"]["capabilities"].dump();
+        check(capabilities.find("\"events\"")!=std::string::npos,"event channel capability");
         check(capabilities.find("\"messages\"")!=std::string::npos&&capabilities.find("player-reviews")!=std::string::npos,"capabilities");
         // Messages: account-global, bounded, recipient-owned.
         check(call(service,"messages.send",{{"gamertags",Json::array({"Bob","Charlie"})},{"text","good game"}},tokens[0])["result"]["sent"]==2,"two recipients");
+        check(hinted({{bobId,"messages"},{charlieId,"messages"}}),"each recipient hears of a message");
         check(call(service,"messages.send",{{"gamertags",Json::array({"Alice"})},{"text","self"}},tokens[0])["error"]=="INVALID_ARGUMENT","no self message");
+        check(hinted({}),"a refused request tells nobody");
         check(call(service,"messages.send",{{"gamertags",Json::array({"Nobody"})},{"text","x"}},tokens[0])["error"]=="NOT_FOUND","unknown recipient");
         check(call(service,"messages.send",{{"gamertags",Json::array({"Bob","Bob"})},{"text","x"}},tokens[0])["error"]=="INVALID_ARGUMENT","duplicate recipient");
         check(call(service,"messages.send",{{"gamertags",Json::array({"Bob"})},{"text",std::string(257,'a')}},tokens[0])["error"]!="OK","text bound");
@@ -78,17 +90,23 @@ int main() {
         auto party=[&](const std::string& token){return call(service,"parties.get",Json::object(),token)["result"];};
         check(party(tokens[0])["party"].is_null()&&party(tokens[0])["invitations"].empty(),"no party yet");
         check(call(service,"parties.invite",{{"gamertag","Bob"}},tokens[0])["error"]=="NOT_AUTHORIZED","friends only");
+        hints.clear();
         for(const auto& [a,b,tag,back]:std::array<std::tuple<int,int,const char*,const char*>,2>{{{0,1,"Bob","Alice"},{0,2,"Charlie","Alice"}}}) {
             check(call(service,"friends.add",{{"gamertag",tag}},tokens[a])["error"]=="OK","friend request");
+            check(hinted({{b==1?bobId:charlieId,"friends"}}),"the other side hears of a friend request");
             check(call(service,"friends.accept",{{"gamertag",back}},tokens[b])["error"]=="OK","friend accepted");
+            check(hinted({{aliceId,"friends"}}),"the requester hears of the answer");
         }
         auto invited=call(service,"parties.invite",{{"gamertag","bob"}},tokens[0]);
+        check(hinted({{bobId,"party"}}),"a party invitation");
         check(invited["error"]=="OK"&&invited["result"]["party"]["members"].size()==1&&invited["result"]["party"]["leaderId"]==invited["result"]["party"]["members"][0]["userId"],"inviting starts a party");
         const auto id=invited["result"]["party"]["id"].get<std::string>();
         auto bobView=party(tokens[1]);
         check(bobView["party"].is_null()&&bobView["invitations"].size()==1&&bobView["invitations"][0]["senderGamertag"]=="Alice"&&bobView["invitations"][0]["members"]==1,"invitation in the inbox");
         check(call(service,"parties.accept",{{"party",std::string(32,'0')}},tokens[1])["error"]=="NOT_FOUND","only an invited party");
+        hints.clear();
         auto joined=call(service,"parties.accept",{{"party",id}},tokens[1])["result"];
+        check(hinted({{aliceId,"party"}}),"the party hears who joined");
         check(joined["party"]["members"].size()==2&&joined["invitations"].empty(),"joined");
         Json alice;for(const auto& member:joined["party"]["members"])if(member["gamertag"]=="Alice")alice=member;
         check(alice.is_object()&&alice["online"]==true,"members with their state");
@@ -97,7 +115,9 @@ int main() {
         check(call(service,"parties.invite",{{"gamertag","Bob"}},tokens[0])["error"]=="CONFLICT","already a member");
         check(call(service,"parties.invite",{{"gamertag","Charlie"}},tokens[0])["error"]=="OK","second invitation");
         check(call(service,"parties.decline",{{"party",id}},tokens[2])["result"]["invitations"].empty(),"declined");
+        hints.clear();
         check(call(service,"parties.leave",Json::object(),tokens[0])["result"]["party"].is_null(),"leader leaves");
+        check(hinted({{bobId,"party"}}),"the rest of the party hears who left");
         auto rest=party(tokens[1]);
         check(rest["party"]["members"].size()==1&&rest["party"]["leaderId"]==rest["party"]["members"][0]["userId"],"leadership passes on");
         check(call(service,"parties.leave",Json::object(),tokens[1])["result"]["party"].is_null()&&party(tokens[1])["party"].is_null(),"the last member ends the party");

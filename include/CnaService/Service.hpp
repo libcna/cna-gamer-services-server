@@ -4,7 +4,10 @@
 #include "CnaService/Avatars.hpp"
 #include <mutex>
 #include "CnaService/RelayAuthorization.hpp"
+#include <functional>
 #include <map>
+#include <utility>
+#include <vector>
 namespace CnaService {
 /** @brief Title-isolated logical service; transport-independent. */
 class Service {
@@ -41,7 +44,17 @@ public:
     /** @brief Releases a disconnected grant without touching account/directory state.
      * @param grant Exact server-owned grant. */
     void releaseRelayGrant(const RelayGrant& grant);
+    /** @brief Where push hints go: after a request succeeds, each other account it changed and what
+     * changed for it ("invitations", "messages", "friends" or "party"). Called outside the service
+     * lock, on the request's worker thread. @param sink Receiver. */
+    void setHintSink(std::function<void(const std::string& user,const std::string& topic)> sink);
+    /** @brief Authenticates an event channel. @param game Title. @param token Access token; never
+     * logged. @return The account the live token belongs to; throws UNAUTHENTICATED otherwise. */
+    std::string eventAccount(std::string_view game,std::string_view token);
 private:
+    void hint(const std::string& user,const char* topic);
+    std::vector<std::pair<std::string,std::string>> hints_;
+    std::function<void(const std::string&,const std::string&)> hintSink_;
     Json issueRelayTicket(const std::string& user,const std::string& game,const Json& args);
     bool validateRelayGrantLocked(const RelayGrant& grant,bool redeemed);
     void pruneRelayTickets();

@@ -2,6 +2,7 @@
 #include "CnaService/Listener.hpp"
 #include "CnaService/Service.hpp"
 #include "RelayListener.hpp"
+#include "EventListener.hpp"
 #include "CnaService/RelayProtocol.hpp"
 #include <boost/beast/websocket.hpp>
 #include <boost/asio.hpp>
@@ -84,7 +85,7 @@ private:
 };
 // One line a minute for the operator: responses per error code, refused connections, open
 // control connections and attached relays. Never a credential, address or request body.
-net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub) {
+net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub,EventHub& events) {
     net::steady_timer timer(co_await net::this_coro::executor);
     while(true) {
         timer.expires_after(std::chrono::minutes(1));
@@ -92,7 +93,7 @@ net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub)
         std::ostringstream line;line<<"stats";
         for(const auto& [code,count]:service.takeOutcomes())line<<' '<<code<<'='<<count;
         const auto [control,refused]=admission.take();
-        line<<" refused="<<refused<<" control="<<control<<" relays="<<hub.size();
+        line<<" refused="<<refused<<" control="<<control<<" relays="<<hub.size()<<" events="<<events.size();
         std::cout<<line.str()<<std::endl;
     }
 }
@@ -116,7 +117,7 @@ constexpr int MaxRequestsPerConnection=1000;
 constexpr std::string_view FilesPath="/cna/v1/files/";
 constexpr std::chrono::seconds KeepAliveIdle{5};
 template<class Stream>
-net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer,ConnectionLease& lease) {
+net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,EventHub& events,Workers& workers,const std::string& peer,ConnectionLease& lease) {
     beast::flat_buffer buffer;
     for(int served=0;;++served) {
         beast::get_lowest_layer(stream).expires_after(served==0?std::chrono::seconds(10):KeepAliveIdle);
@@ -129,6 +130,10 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Work
         if(request.target()==RelayPath&&beast::websocket::is_upgrade(request)) {
             if(buffer.size()!=0)co_return false;
             co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests,[&lease]{lease.release();});co_return true;
+        }
+        if(request.target()==EventsPath&&beast::websocket::is_upgrade(request)) {
+            if(buffer.size()!=0)co_return false;
+            co_await serveEvents(std::move(stream),std::move(request),service,events,workers.requests,[&lease]{lease.release();});co_return true;
         }
         beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         const bool again=request.keep_alive()&&served+1<MaxRequestsPerConnection;
@@ -164,22 +169,22 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Work
         if(ec||!again)co_return false;
     }
 }
-net::awaitable<void> connection(tcp::socket socket,std::string peer,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
+net::awaitable<void> connection(tcp::socket socket,std::string peer,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,EventHub& events,Workers& workers,bool insecure) {
     ConnectionLease lease(admission,peer);
     try {
         if(insecure) {
-            beast::tcp_stream stream(std::move(socket));co_await exchange(stream,service,hub,workers,peer,lease);
+            beast::tcp_stream stream(std::move(socket));co_await exchange(stream,service,hub,events,workers,peer,lease);
         } else {
             beast::ssl_stream<beast::tcp_stream> stream(std::move(socket),tls);
             beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
             co_await stream.async_handshake(net::ssl::stream_base::server,net::use_awaitable);
-            if(co_await exchange(stream,service,hub,workers,peer,lease))co_return;
+            if(co_await exchange(stream,service,hub,events,workers,peer,lease))co_return;
             boost::system::error_code ec;
             co_await stream.async_shutdown(net::redirect_error(net::use_awaitable,ec));
         }
     } catch (...) { /* Untrusted transport failures have no credential-bearing diagnostics. */ }
 }
-net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
+net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,EventHub& events,Workers& workers,bool insecure) {
     net::steady_timer pause(acceptor.get_executor());
     while(true) {
         tcp::socket socket(net::make_strand(acceptor.get_executor()));
@@ -198,7 +203,7 @@ net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ss
         auto peer=endpoint.address().to_string();
         if(!admission.admit(peer)) {socket.close(ec);continue;}
         auto executor=socket.get_executor();
-        net::co_spawn(executor,connection(std::move(socket),std::move(peer),admission,tls,service,hub,workers,insecure),net::detached);
+        net::co_spawn(executor,connection(std::move(socket),std::move(peer),admission,tls,service,hub,events,workers,insecure),net::detached);
     }
 }
 }
@@ -208,7 +213,8 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     if(insecureLoopback && !bind.is_loopback())throw Error("INSECURE_BIND_REFUSED");
     if(!insecureLoopback && (certificate.empty()||key.empty()))throw Error("TLS_REQUIRED");
     raiseDescriptorLimit();
-    Service service(database);RelayHub hub;
+    Service service(database);RelayHub hub;EventHub events;
+    service.setHintSink([&events](const std::string& user,const std::string& topic){events.notify(user,topic);});
     net::io_context io(2);net::ssl::context tls(net::ssl::context::tls_server);
     if(SSL_CTX_set_min_proto_version(tls.native_handle(),TLS1_2_VERSION)!=1)throw Error("TLS_REQUIRED");
     if(!insecureLoopback) {
@@ -218,8 +224,8 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     tcp::acceptor acceptor(io,{bind,port});
     net::signal_set signals(io,SIGINT,SIGTERM);signals.async_wait([&](auto,int){io.stop();});
     Workers workers;Admission admission;
-    net::co_spawn(io,accept(acceptor,admission,tls,service,hub,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
-    net::co_spawn(io,report(service,admission,hub),net::detached);
+    net::co_spawn(io,accept(acceptor,admission,tls,service,hub,events,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
+    net::co_spawn(io,report(service,admission,hub,events),net::detached);
     std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
     std::jthread worker([&]{io.run();});io.run();worker.join();
     workers.requests.join();workers.signIns.join();

@@ -46,6 +46,12 @@ Json Service::parties(const std::string& user,const std::string& game,const std:
         Statement count(store_.db(),"SELECT COUNT(*) FROM party_members WHERE party_id=?");count.bind(1,party);(void)count.row();
         return count.number(0);
     };
+    // Everyone whose party page this changes hears of it.
+    std::set<std::string> affected;
+    auto everyone=[&](const std::string& party) {
+        Statement rows(store_.db(),"SELECT user_id FROM party_members WHERE party_id=?");rows.bind(1,party);
+        while(rows.row())affected.insert(rows.text(0));
+    };
     auto leave=[&](const std::string& party) {
         Statement remove(store_.db(),"DELETE FROM party_members WHERE party_id=? AND user_id=?");remove.bind(1,party);remove.bind(2,user);(void)remove.row();
         if(members(party)==0) {
@@ -80,6 +86,7 @@ Json Service::parties(const std::string& user,const std::string& game,const std:
         Statement invite(store_.db(),"INSERT INTO party_invitations(party_id,sender_id,recipient_id,created) VALUES(?,?,?,?) "
             "ON CONFLICT(party_id,recipient_id) DO UPDATE SET sender_id=excluded.sender_id,created=excluded.created");
         invite.bind(1,*party);invite.bind(2,user);invite.bind(3,recipient);invite.bind(4,timestamp);(void)invite.row();
+        affected.insert(recipient);
     } else if(op=="parties.accept") {
         const auto party=partyId(args);
         Statement invitation(store_.db(),"SELECT 1 FROM party_invitations WHERE party_id=? AND recipient_id=?");invitation.bind(1,party);invitation.bind(2,user);
@@ -87,15 +94,16 @@ Json Service::parties(const std::string& user,const std::string& game,const std:
         const auto previous=current();
         if(previous!=party) {
             if(members(party)>=MaxPartySize)throw Error("LIMIT_EXCEEDED");
-            if(previous)leave(*previous);
+            if(previous){leave(*previous);everyone(*previous);}
             Statement join(store_.db(),"INSERT INTO party_members(party_id,user_id,joined) VALUES(?,?,?)");join.bind(1,party);join.bind(2,user);join.bind(3,timestamp);(void)join.row();
         }
         Statement used(store_.db(),"DELETE FROM party_invitations WHERE party_id=? AND recipient_id=?");used.bind(1,party);used.bind(2,user);(void)used.row();
+        everyone(party);
     } else if(op=="parties.decline") {
         const auto party=partyId(args);
         Statement declined(store_.db(),"DELETE FROM party_invitations WHERE party_id=? AND recipient_id=?");declined.bind(1,party);declined.bind(2,user);(void)declined.row();
     } else if(op=="parties.leave") {
-        if(const auto party=current())leave(*party);
+        if(const auto party=current()){leave(*party);everyone(*party);}
     }
     // The caller's view: the party with each member's state in this title, and invitations.
     Json result{{"party",nullptr},{"invitations",Json::array()}};
@@ -125,6 +133,7 @@ Json Service::parties(const std::string& user,const std::string& game,const std:
         result["invitations"].push_back(Json{{"party",inbox.text(0)},{"senderId",inbox.text(1)},{"senderGamertag",inbox.text(2)},
             {"created",inbox.number(3)},{"members",inbox.number(4)}});
     transaction.commit();
+    for(const auto& other:affected)if(other!=user)hint(other,"party");
     return result;
 }
 }
