@@ -115,6 +115,8 @@ int main() {
             check(call(s,"one","friends.accept",{{"gamertag","Bob"}},alice)["error"]=="INVALID_STATE","accept without request");
             check(call(s,"one","friends.add",{{"gamertag","Alice"}},alice)["error"]=="INVALID_ARGUMENT","self request");
             check(call(s,"one","profile.get",{{"gamertag","Alice"}},bob)["result"]["gamerScore"]==10,"profile aggregate");
+            check(call(s,"one","profile.get",{{"gamertag","Alice"}},bob)["result"]["titlesPlayed"]==1,"titles played by an earned achievement");
+            check(call(s,"one","profile.get",{{"gamertag","Bob"}},alice)["result"]["titlesPlayed"]==1,"titles played by presence");
             check(call(s,"one","gamer.lookup",{{"gamertag","absent"}},alice)["error"]=="NOT_FOUND","lookup absent");
         }
         {

@@ -21,8 +21,13 @@ Json Service::identity(const std::string& id) {
     if (!s.row()) throw Error("NOT_FOUND");
     Statement score(store_.db(),"SELECT COALESCE(SUM(a.score),0),COUNT(*) FROM earned e JOIN achievements a ON a.game_id=e.game_id AND a.key=e.key WHERE e.user_id=?");
     score.bind(1,id);(void)score.row();
+    // A title counts as played once the account has presence, an earned achievement or a leaderboard row in it.
+    Statement titles(store_.db(),"SELECT COUNT(*) FROM (SELECT game_id FROM presence WHERE user_id=?1 UNION "
+        "SELECT game_id FROM earned WHERE user_id=?1 UNION SELECT game_id FROM leaderboard_entries WHERE user_id=?1)");
+    titles.bind(1,id);(void)titles.row();
     return Json{{"userId",s.text(0)},{"gamertag",s.text(1)},{"displayName",s.text(1)},{"motto",s.text(2)},
-        {"region",s.text(3)},{"allowOnlineSessions",s.number(4)!=0},{"gamerScore",score.number(0)},{"totalAchievements",score.number(1)},{"picture",s.text(5)}};
+        {"region",s.text(3)},{"allowOnlineSessions",s.number(4)!=0},{"gamerScore",score.number(0)},{"totalAchievements",score.number(1)},
+        {"titlesPlayed",titles.number(0)},{"picture",s.text(5)}};
 }
 Json Service::dispatch(const Json& r,const std::string& peer) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
