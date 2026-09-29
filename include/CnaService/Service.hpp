@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "CnaService/Store.hpp"
+#include "CnaService/Avatars.hpp"
 #include <mutex>
 #include "CnaService/RelayAuthorization.hpp"
 #include <map>
@@ -14,6 +15,20 @@ public:
      * @param bytes Request bytes. @param peer Server-derived source identity.
      * @return Response bytes. */
     std::string handle(std::string_view bytes,std::string_view peer);
+    /** @brief One file for the binary route. */
+    struct File {
+        /** @brief OK or the error code (UNAUTHENTICATED, NOT_FOUND, RATE_LIMITED, INVALID_ARGUMENT, ...). */
+        std::string code;
+        /** @brief Media type. */
+        std::string mime;
+        /** @brief Contents. */
+        std::string bytes;
+    };
+    /** @brief Serves one immutable file by content (GET /cna/v1/files/<sha256>): a title asset, an
+     * account picture, a file of an imported avatar catalog or a catalog manifest, to a signed-in
+     * account of the title, within its download budget. @param game Title. @param token Access
+     * token; never logged. @param hash Lower-case hex SHA-256. @return File or refusal. */
+    File file(std::string_view game,std::string_view token,std::string_view hash);
     /** @brief Takes the count of responses per error code since the previous call, for the
      * operator's periodic statistics. @return Code to count; OK included. */
     std::map<std::string,unsigned long long> takeOutcomes();
@@ -47,6 +62,7 @@ private:
     bool migrateDirectoryHost(const std::string& session,const std::string& departing);
     Json invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args);
     Json avatars(const std::string& user,const std::string& op,const Json& args,long long now);
+    const CatalogInfo& catalog(long long version);
     Json invitationSnapshot(const std::string& id);
 
     Store store_;
@@ -58,5 +74,8 @@ private:
     std::map<std::string,unsigned long long> outcomes_;
     std::map<std::string,long long> requestIdCounts_;
     std::map<std::string,Rate> requestBudgets_;
+    std::map<long long,CatalogInfo> catalogs_;
+    struct Budget { long long start=0; long long bytes=0; };
+    std::map<std::string,Budget> downloads_;
 };
 }

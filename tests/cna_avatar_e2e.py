@@ -3,8 +3,11 @@
 
 The service imports every catalog CNA embeds (v1, v2, ...) and one newer catalog the client does
 not have: the newest plus one extra hat. Alice's avatar is a format 2 description (facial hair and
-a shaped face) wearing that hat, so her CNA client must download the hat by hash, verify and cache
-it, and still render her avatar without substituting anything.
+a shaped face) wearing that hat. Her CNA client installs that catalog as one pack -- only the
+files it lacks cross the wire, through the binary file route, verified, validated and activated
+at once -- and renders her avatar without substituting anything; a later run uses the installed
+pack. A client that declines catalog updates is given the service's projection onto the newest
+catalog it has, which it draws with nothing substituted, and installs nothing.
 """
 import json, os, pathlib, shutil, subprocess, sys, tempfile, zlib
 
@@ -80,30 +83,52 @@ def main():
         try:
             line = server.stdout.readline(); assert "listening" in line, "service startup"
             url = "https://localhost:" + line.strip().rsplit(":", 1)[1] + "/cna/v1"
-            cache = root / "cache"
+            cache = root / "cache"; installed = root / "catalogs"
             env = os.environ.copy(); env.pop("DISPLAY", None); env["WAYLAND_DISPLAY"] = ""
             env.update(CNA_GAMER_SERVICES_ENDPOINT=url, CNA_GAME_ID="one", CNA_GAMER_SERVICES_CA_BUNDLE=str(cert),
                        CNA_GAMER_SERVICES_CREDENTIALS_DIR="0", CNA_GAMER_SERVICES_INSECURE_LOOPBACK="0",
-                       CNA_GAMER_SERVICES_CACHE_DIR=str(cache))
-            for attempt in ("first", "cached"):
+                       CNA_GAMER_SERVICES_CACHE_DIR=str(cache), CNA_GAMER_SERVICES_CATALOGS_DIR=str(installed))
+            embedded = ",".join(str(v) for v in versions)
+            pack = installed / ("v%d" % target)
+            stamp = None
+            for attempt in ("first", "installed"):
                 result = subprocess.run([client], input="alice-password\n", text=True, capture_output=True, env=env, timeout=120)
                 assert result.returncode == 0, "avatar client %s run: %s" % (attempt, result.stderr.strip())
                 lines = dict(l.split(" ", 1) for l in result.stdout.splitlines() if l.startswith("avatar-"))
+                # Before anything is read: the release's catalogs, plus the pack installed by the first run.
+                assert lines.get("avatar-catalogs") == "available=" + embedded + ("" if attempt == "first" else ",%d" % target), lines
                 assert lines.get("avatar-own") == "valid=1 body=1 height=1760 catalog=%d" % target, lines
                 assert lines.get("avatar-lookup", "").startswith("valid=1 body=0 "), lines
                 assert lines.get("avatar-none") == "valid=0 body=0 height=0 catalog=0", lines
-                assert lines.get("avatar-ready") == "substituted=0", lines
+                assert lines.get("avatar-ready") == "substituted=0 unavailable=0", lines
                 # The avatar editor's save: an edit on the newest catalog, stored and read back.
                 assert lines.get("avatar-edit") == "saved=1 format=2", lines
-                # Only the item missing from CNA's embedded catalog came over the wire, verified and cached.
-                cached = sorted(p.name for p in cache.iterdir()) if cache.is_dir() else []
-                assert cached == [crown["male"]], cached
+                # One installed, self-contained pack; nothing in the per-file asset cache; no staging left.
+                record = json.loads((pack / "pack.json").read_text())
+                assert record["version"] == target and record["packFormat"] == 1, record
+                assert sorted(p.name for p in pack.iterdir()) == sorted({a["sha256"] for a in manifest["assets"]} | {"catalog.json", "pack.json"})
+                assert not any(p.name.startswith(".staging-") for p in installed.iterdir()), "staging removed"
+                assert not cache.is_dir() or not any(cache.iterdir()), "no avatar file in the asset cache"
+                if stamp is None:
+                    stamp = (pack / "pack.json").stat().st_mtime_ns
+                assert (pack / "pack.json").stat().st_mtime_ns == stamp, "the installed pack is reused, not reinstalled"
                 print(attempt, "run:", result.stdout.strip().replace("\n", "; "))
+            # A client that declines catalog updates: the service projects Alice's avatar onto the
+            # newest catalog it has (the crown, which only the newer catalog has, left out).
+            declined = root / "catalogs-declined"
+            env.update(CNA_AVATAR_CATALOG_UPDATES="0", CNA_GAMER_SERVICES_CATALOGS_DIR=str(declined))
+            result = subprocess.run([client, "--view-only"], input="alice-password\n", text=True, capture_output=True, env=env, timeout=120)
+            assert result.returncode == 0, "declining client: " + result.stderr.strip()
+            lines = dict(l.split(" ", 1) for l in result.stdout.splitlines() if l.startswith("avatar-"))
+            assert lines.get("avatar-own") == "valid=1 body=1 height=1760 catalog=%d" % versions[-1], lines
+            assert lines.get("avatar-ready") == "substituted=0 unavailable=0", lines
+            assert not declined.exists() or not any(declined.iterdir()), "nothing installed"
+            print("declining run:", result.stdout.strip().replace("\n", "; "))
         finally:
             server.terminate(); server.wait(timeout=10); server.stdout.close()
     print("Standard XNA avatars over the CNA service: every CNA catalog imported; a format 2 avatar on catalog v%d; "
-          "own/looked-up/absent descriptions; the one missing item fetched by hash, cached, rendered Ready; "
-          "an editor save stored through avatars.set." % target)
+          "own/looked-up/absent descriptions; the missing catalog installed as one pack and reused; a declining "
+          "client drawing the projection; an editor save stored through avatars.set." % target)
     return 0
 
 

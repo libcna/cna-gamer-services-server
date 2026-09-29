@@ -121,6 +121,8 @@ int importAvatarCatalog(Store& store,std::string_view text,const std::map<std::s
     if(!manifest.is_object()||manifest.value("format",0)!=1||manifest.value("rig",std::string())!="cna-avatar-71")
         throw Error("INVALID_ARGUMENT");
     const auto version=integerField(manifest,"catalogVersion",1,65535);
+    // The contract level these checks enforce; a catalog for newer readers needs a newer service.
+    if(manifest.contains("reader")&&integerField(manifest,"reader",1,1)!=1)throw Error("INVALID_ARGUMENT");
     if(!manifest.contains("assets")||!manifest["assets"].is_array()||manifest["assets"].empty()||manifest["assets"].size()>256)
         throw Error("INVALID_ARGUMENT");
     std::map<std::string,std::string> hashes;
@@ -312,6 +314,65 @@ std::string randomAvatarDescription(sqlite3* db,std::optional<int> bodyType)
     return d;
 }
 
+CatalogInfo catalogInfo(sqlite3* db,long long version)
+{
+    Statement row(db,"SELECT manifest FROM avatar_catalogs WHERE version=?");row.bind(1,version);
+    if(!row.row())throw Error("NOT_FOUND");
+    CatalogInfo info;
+    info.version=version;
+    info.manifest=row.text(0);
+    info.manifestSha256=sha256(info.manifest);
+    const auto manifest=parse(info.manifest);
+    info.reader=static_cast<int>(manifest.value("reader",1));
+    info.formats={1};
+    if(manifest.contains("faceControls")||manifest.contains("featureItems"))info.formats.push_back(2);
+    for(const auto& asset:manifest.at("assets"))info.totalBytes+=asset.at("size").get<long long>();
+    Statement items(db,"SELECT id,slot FROM avatar_catalog_items WHERE version=?");items.bind(1,version);
+    while(items.row())info.items[items.number(0)]=static_cast<int>(items.number(1));
+    return info;
+}
+
+Json catalogPack(const CatalogInfo& info)
+{
+    return Json{{"version",info.version},{"packFormat",1},{"reader",info.reader},{"descriptionFormats",info.formats},
+                {"manifestSha256",info.manifestSha256},{"manifestSize",static_cast<long long>(info.manifest.size())},
+                {"totalBytes",info.totalBytes}};
+}
+
+std::string projectAvatarDescription(std::string_view description,const CatalogInfo& target,bool formatTwo)
+{
+    std::string out(description);
+    if(out.size()!=AvatarDescriptionSize)return out;
+    out[CatalogOffset]=static_cast<char>(target.version&0xff);out[CatalogOffset+1]=static_cast<char>(target.version>>8);
+    auto slotDefault=[&](int slot)->long long {
+        for(const auto& [id,itemSlot]:target.items)if(itemSlot==slot)return id;
+        return 0;
+    };
+    for(int slot=0;slot<6;++slot) {
+        long long id=read16(out,ItemOffset+slot*2);
+        if(id!=0) {
+            const auto found=target.items.find(id);
+            if(found==target.items.end()||found->second!=slot)id=slot<4?slotDefault(slot):0;
+        }
+        out[ItemOffset+slot*2]=static_cast<char>(id&0xff);out[ItemOffset+slot*2+1]=static_cast<char>(id>>8);
+    }
+    const bool faceTarget=formatTwo&&std::ranges::find(target.formats,2)!=target.formats.end();
+    if(out[0]==2&&faceTarget) {
+        const long long facial=read16(out,FacialHairOffset);
+        const auto found=target.items.find(facial);
+        if(facial!=0&&(found==target.items.end()||found->second!=FacialHairSlot)) {
+            out[FacialHairOffset]=0;out[FacialHairOffset+1]=0;
+        }
+        const bool shaped=std::any_of(out.begin()+FaceOffset,out.begin()+FaceReservedOffset,[](char c){return static_cast<unsigned char>(c)!=128;});
+        if(!shaped&&read16(out,FacialHairOffset)==0)out[0]=1;
+    } else {
+        out[0]=1;
+    }
+    if(out[0]==1)std::fill(out.begin()+FacialHairOffset,out.begin()+FaceReservedOffset,'\0');
+    setChecksum(out);
+    return out;
+}
+
 long long storeAvatar(sqlite3* db,const std::string& userId,std::string_view description,long long now)
 {
     Statement upsert(db,"INSERT INTO avatars(user_id,description,revision,updated) VALUES(?,?,1,?) "
@@ -338,6 +399,7 @@ void setAvatar(Store& store,const std::string& username,const std::optional<std:
 }
 
 #include "CnaService/Service.hpp"
+#include <set>
 
 namespace CnaService {
 namespace {
@@ -363,13 +425,19 @@ std::string hexDecode(std::string_view text)
 }
 }
 
+const CatalogInfo& Service::catalog(long long version)
+{
+    // Imported catalogs never change, so what was derived from one stays true.
+    if(auto found=catalogs_.find(version);found!=catalogs_.end())return found->second;
+    return catalogs_.emplace(version,catalogInfo(store_.db(),version)).first->second;
+}
+
 Json Service::avatars(const std::string& user,const std::string& op,const Json& a,long long now)
 {
     if(op=="avatars.get") {
         // Any signed-in account may see any account's avatar, like its gamertag.
         if(!a.contains("userIds")||!a["userIds"].is_array()||a["userIds"].empty()||a["userIds"].size()>16)
             throw Error("INVALID_ARGUMENT");
-        Json avatars=Json::array();
         // Clients list the description formats they read; one that does not (or cannot read format
         // 2) is given the format 1 copy: the same body, colours and items without facial hair or
         // face shape.
@@ -381,19 +449,60 @@ Json Service::avatars(const std::string& user,const std::string& op,const Json& 
                 formatTwo=formatTwo||format.get<int>()==2;
             }
         }
+        // A client that says which catalogs it has, and whether and how large it installs the one an
+        // avatar names, is given the stored avatar when it can draw it, else a projection onto the
+        // newest catalog it has. One that does not say (every client before catalog packs) fetches
+        // files one by one and reads contract level 1 only.
+        const bool negotiated=a.contains("catalogs");
+        std::set<long long> catalogs;bool updates=false;long long maxBytes=0,reader=1;
+        if(negotiated) {
+            if(!a["catalogs"].is_array()||a["catalogs"].empty()||a["catalogs"].size()>64)throw Error("INVALID_ARGUMENT");
+            for(const auto& version:a["catalogs"]) {
+                if(!version.is_number_integer()||version.get<long long>()<1||version.get<long long>()>65535)throw Error("INVALID_ARGUMENT");
+                catalogs.insert(version.get<long long>());
+            }
+            if(!a.contains("catalogUpdates")||!a["catalogUpdates"].is_boolean())throw Error("INVALID_ARGUMENT");
+            updates=a["catalogUpdates"].get<bool>();
+            maxBytes=integerField(a,"maxCatalogBytes",0,1LL<<40);
+            reader=integerField(a,"reader",1,1000);
+        }
+        auto drawable=[&](const CatalogInfo& info) {
+            if(!negotiated)return info.reader<=1;
+            return catalogs.contains(info.version)||(updates&&info.reader<=reader&&info.totalBytes<=maxBytes);
+        };
+        Json avatars=Json::array();
         for(const auto& value:a["userIds"]) {
             if(!value.is_string())throw Error("INVALID_ARGUMENT");
             const auto id=value.get<std::string>();
             if(id.empty()||id.size()>64||id.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
             Statement avatar(store_.db(),"SELECT description,revision FROM avatars WHERE user_id=?");avatar.bind(1,id);
-            if(avatar.row()) {
-                const auto stored=avatar.blob(0);
-                avatars.push_back(Json{{"userId",id},{"description",hexEncode(formatTwo?stored:formatOneDescription(stored))},
-                                       {"revision",avatar.number(1)}});
+            if(!avatar.row()) {
+                avatars.push_back(Json{{"userId",id},{"description",nullptr},{"revision",0}});
+                continue;
             }
-            else avatars.push_back(Json{{"userId",id},{"description",nullptr},{"revision",0}});
+            const auto stored=avatar.blob(0);
+            const long long version=static_cast<unsigned char>(stored[8])|static_cast<long long>(static_cast<unsigned char>(stored[9]))<<8;
+            Json entry{{"userId",id},{"revision",avatar.number(1)}};
+            if(drawable(catalog(version))) {
+                entry["description"]=hexEncode(formatTwo?stored:formatOneDescription(stored));
+            } else {
+                // The newest catalog this client has (or, for an old client, can read).
+                const CatalogInfo* target=nullptr;
+                Statement versions(store_.db(),"SELECT version FROM avatar_catalogs ORDER BY version DESC");
+                while(!target&&versions.row()) {
+                    const auto& info=catalog(versions.number(0));
+                    if(negotiated?catalogs.contains(info.version):info.reader<=1)target=&info;
+                }
+                entry["description"]=hexEncode(target?projectAvatarDescription(stored,*target,formatTwo):formatOneDescription(stored));
+                entry["projected"]=true;
+                entry["catalogVersion"]=version;
+            }
+            avatars.push_back(std::move(entry));
         }
         return Json{{"avatars",avatars}};
+    }
+    if(op=="avatars.catalogPack") {
+        return catalogPack(catalog(integerField(a,"version",1,65535)));
     }
     if(op=="avatars.set") {
         const auto description=hexDecode(stringField(a,"description",AvatarDescriptionSize*2));

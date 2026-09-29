@@ -102,6 +102,7 @@ private:
 // burst (sign-in, a catalog download) on one connection but frees an idle one long before the
 // next heartbeat, so many players behind one NAT address fit within its admission share.
 constexpr int MaxRequestsPerConnection=1000;
+constexpr std::string_view FilesPath="/cna/v1/files/";
 constexpr std::chrono::seconds KeepAliveIdle{5};
 template<class Stream>
 net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer,ConnectionLease& lease) {
@@ -123,7 +124,23 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Work
         http::response<http::string_body> response{http::status::ok,11};
         response.set(http::field::content_type,"application/json");response.set(http::field::cache_control,"no-store");
         response.keep_alive(again);
-        if(request.method()!=http::verb::post||request.target()!="/cna/v1") {
+        if(request.method()==http::verb::get&&request.target().starts_with(FilesPath)) {
+            // Immutable files by content, as raw bytes: catalog packs travel here, not as hex in JSON.
+            std::string_view authorization=request[http::field::authorization];
+            const auto token=authorization.starts_with("Bearer ")?authorization.substr(7):std::string_view();
+            const std::string game(request["X-CNA-Game"]),path(request.target().substr(FilesPath.size()));
+            const auto file=co_await net::co_spawn(workers.requests,[&]()->net::awaitable<Service::File>{co_return service.file(game,token,path);},net::use_awaitable);
+            if(file.code=="OK") {
+                response.set(http::field::content_type,file.mime);
+                response.set(http::field::cache_control,"private, max-age=31536000, immutable");
+                response.body()=file.bytes;
+            } else {
+                response.result(file.code=="UNAUTHENTICATED"?http::status::unauthorized:file.code=="NOT_FOUND"?http::status::not_found:
+                    file.code=="RATE_LIMITED"?http::status::too_many_requests:file.code=="INVALID_ARGUMENT"?http::status::bad_request:
+                    http::status::internal_server_error);
+                response.body()=CnaService::response("",file.code).dump();
+            }
+        } else if(request.method()!=http::verb::post||request.target()!="/cna/v1") {
             response.result(http::status::not_found);response.body()=CnaService::response("","NOT_FOUND").dump();
         } else {
             // Storage and sign-in derivation block; they run on the worker pools so these network

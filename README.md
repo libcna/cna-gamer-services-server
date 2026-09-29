@@ -24,10 +24,10 @@ is missing.
 | `identity`, `authentication`, `session-refresh`, `heartbeat` | Title-scoped sign-in (scrypt verifiers), one-hour access tokens, rotating 30-day refresh families with replay revocation, `auth.ping` |
 | `friends`, `friend-requests`, `presence`, `presence-status` | Mutual friend requests, per-title rich presence, online/away/busy, joinable and invitation flags |
 | `game-defaults`, `gamer-zone` | Account-wide XNA `GameDefaults`; gamer zone; reputation from player reviews |
-| `achievements`, `assets` | Title achievement catalogs with pictures; immutable hash-addressed PNG/GLB assets read in chunks |
+| `achievements`, `assets`, `files` | Title achievement catalogs with pictures; immutable hash-addressed PNG/GLB assets, read in chunks or as raw bytes (`GET /cna/v1/files/<sha256>`) |
 | `leaderboard-reads`, `local-leaderboard-commit`, `leaderboard-epoch-abort`, `ranked-arbitration` | Paged, centered and restricted reads; commits at XNA gameplay boundaries; Ranked rounds reconciled from every machine's report |
 | `messages`, `player-reviews` | Guide messages and the player review pane |
-| `avatars` | One validated avatar description per account; catalogs served by hash so clients fetch only missing items |
+| `avatars`, `avatar-catalog-packs` | One validated avatar description and revision per account, negotiated per client: the stored avatar when the client has (or will install) its catalog, else a marked projection; each catalog version described as one installable pack |
 | `session-directory`, `session-removal`, `host-migration`, `session-add-members`, `session-invitations` | PlayerMatch and Ranked directory, `RemoveFromSession`, host migration, `AddLocalGamer`, persistent invitations |
 | `relay-tickets`, `relay` | One-use tickets and the WSS relay for ENet datagrams |
 
@@ -194,7 +194,7 @@ ENet over the relay (`service_cna_relay`, `service_cna_owned_enet`); the public 
 lifecycle for PlayerMatch and Ranked (`service_cna_session`), invitations (`service_cna_invite`),
 service restart mid-session (`service_cna_session_restart`), host migration and host crash
 (`service_cna_session_migration`, `service_cna_session_host_crash`), `AddLocalGamer`
-(`service_cna_session_add_gamer`) and avatars with on-demand catalog items (`service_cna_avatars`).
+(`service_cna_session_add_gamer`) and avatars with an installed catalog pack and a projection (`service_cna_avatars`).
 
 The `_nat` variants and the host-crash and AddLocalGamer tests run each CNA process in its own
 rootless user and network namespace behind an outbound-only NAT helper, with identical private
@@ -222,7 +222,10 @@ build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer
 build/cna-gamer-services-admin service.sqlite3 avatar alice random male
 ```
 
-Catalog files are served from the immutable asset store by hash, so a CNA client that lacks an item
-of a newer catalog downloads, verifies and caches just that file. `service_cna_avatars` proves it
-with the standard XNA API, and `service_avatar_validation` uses CNA's catalogs as golden fixtures
-while refusing malformed models and manifests.
+The service stores one description and revision per account, never avatar geometry per account.
+A CNA client draws the catalogs of its own release locally. When an avatar names a catalog the
+client lacks, the client installs that catalog as one pack (`avatars.catalogPack`, then the
+manifest and the files it lacks through the file route), validates it whole and activates it at
+once; a client that declines updates is given a projection onto a catalog it has.
+`service_cna_avatars` proves both with the standard XNA API, and `service_avatar_validation` uses
+CNA's catalogs as golden fixtures while refusing malformed models and manifests.

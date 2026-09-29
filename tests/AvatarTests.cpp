@@ -184,6 +184,59 @@ int main() {
         check(call(service,"avatars.catalog",{{"version",1}},tokens[1])["result"]["manifest"]==parse(catalog(1,v1).manifest),
               "v1 is served exactly as imported after v2");
 
+        // Catalog packs: one catalog version as an installable unit, its manifest and files by content.
+        const auto hello=call(service,"hello",Json::object(),{})["result"]["capabilities"].dump();
+        check(hello.find("\"avatar-catalog-packs\"")!=std::string::npos&&hello.find("\"files\"")!=std::string::npos,"pack capabilities");
+        const auto pack=call(service,"avatars.catalogPack",{{"version",3}},tokens[0])["result"];
+
+        std::string v3Manifest;long long v3Total=0;
+        {Store store(path.string());Statement row(store.db(),"SELECT manifest FROM avatar_catalogs WHERE version=3");(void)row.row();v3Manifest=row.text(0);}
+        const auto v3Json=parse(v3Manifest);
+        for(const auto& asset:v3Json["assets"])v3Total+=asset["size"].get<long long>();
+        check(pack["version"]==3&&pack["packFormat"]==1&&pack["reader"]==1&&pack["descriptionFormats"]==Json::array({1,2})&&
+              pack["manifestSha256"]==sha256(v3Manifest)&&pack["manifestSize"]==v3Manifest.size()&&pack["totalBytes"]==v3Total,"pack descriptor");
+        check(call(service,"avatars.catalogPack",{{"version",2}},tokens[0])["result"]["descriptionFormats"]==Json::array({1}),
+              "a catalog without face controls or feature items is named by format 1 only");
+        check(call(service,"avatars.catalogPack",{{"version",7}},tokens[0])["error"]=="NOT_FOUND","unknown pack");
+        auto manifestFile=service.file("one",tokens[0],sha256(v3Manifest));
+        check(manifestFile.code=="OK"&&manifestFile.mime=="application/json"&&manifestFile.bytes==v3Manifest,"the manifest is a file");
+        std::string itemHash;for(const auto& asset:v3Json["assets"])if(asset["name"]=="item120.male.glb")itemHash=asset["sha256"];
+        const auto itemFile=service.file("one",tokens[0],itemHash);
+        check(itemFile.code=="OK"&&itemFile.mime=="model/gltf-binary"&&sha256(itemFile.bytes)==itemHash,"catalog files by content");
+        check(service.file("two",tokens[0],itemHash).code=="UNAUTHENTICATED","tokens are title-scoped");
+        check(service.file("one",std::string(64,'0'),itemHash).code=="UNAUTHENTICATED","signed-in only");
+        check(service.file("one",tokens[0],std::string(64,'e')).code=="NOT_FOUND","only published files");
+        check(service.file("one",tokens[0],"not-a-hash").code=="INVALID_ARGUMENT","hash format");
+
+        // Negotiation: Bob's stored avatar is format 2 on catalog 3 with facial hair 120.
+        auto readAs=[&](const Json& extra){Json args{{"userIds",Json::array({users[1]})},{"formats",{1,2}}};args.update(extra);
+            return call(service,"avatars.get",args,tokens[0])["result"]["avatars"][0];};
+        auto has=readAs({{"catalogs",{1,2,3}},{"catalogUpdates",false},{"maxCatalogBytes",0},{"reader",1}});
+        check(has["description"]==hex(shaped)&&!has.contains("projected"),"a client with the catalog gets the stored avatar");
+        auto installs=readAs({{"catalogs",{1,2}},{"catalogUpdates",true},{"maxCatalogBytes",1<<30},{"reader",1}});
+        check(installs["description"]==hex(shaped)&&!installs.contains("projected"),"a client that will install the catalog gets the stored avatar");
+        auto declines=readAs({{"catalogs",{1,2}},{"catalogUpdates",false},{"maxCatalogBytes",1<<30},{"reader",1}});
+        auto onTwo=description(2,outfit);
+        check(declines["projected"]==true&&declines["catalogVersion"]==3&&declines["revision"]==has["revision"]&&
+              declines["description"]==hex(onTwo),"a client without the catalog gets a projection onto the newest it has");
+        {Store store(path.string());validateAvatarDescription(store.db(),onTwo);}
+        auto small=readAs({{"catalogs",{1,2}},{"catalogUpdates",true},{"maxCatalogBytes",16},{"reader",1}});
+        check(small["projected"]==true,"a pack larger than the client accepts is projected");
+        check(readAs({{"catalogs",{1,2,3}},{"catalogUpdates",false},{"maxCatalogBytes",0},{"reader",1}})["description"]==hex(shaped),
+              "a projection never changes the stored avatar");
+        check(readAs(Json::object())["description"]==hex(shaped),"an older client (no catalog list) reads contract level 1 catalogs as before");
+        check(readAs({{"catalogs",Json::array()},{"catalogUpdates",false},{"maxCatalogBytes",0},{"reader",1}}).is_null(),"a client has some catalog");
+        // Items the target lacks become their slot's default; optional slots are emptied.
+        {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");
+         auto v4=catalog(4,{{1,"hair"},{2,"hair"},{3,"hair"},{20,"top"},{40,"bottom"},{60,"shoes"},{80,"glasses"},{100,"hat"},{102,"hat"},
+                            {120,"facialHair"}});
+         check(importAvatarCatalog(store,v4.manifest,v4.files)==4,"catalog v4");}
+        check(call(service,"avatars.set",{{"description",hex(description(4,{3,20,40,60,80,102}))}},tokens[0])["error"]=="OK","v4 avatar");
+        const auto aliceOnOne=call(service,"avatars.get",{{"userIds",Json::array({users[0]})},{"formats",{1,2}},{"catalogs",{1}},
+            {"catalogUpdates",false},{"maxCatalogBytes",0},{"reader",1}},tokens[1])["result"]["avatars"][0];
+        check(aliceOnOne["description"]==hex(description(1,{1,20,40,60,80,0})),"hair 3 becomes hair 1, hat 102 is left out on catalog 1");
+        {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");}
+
         // Administration.
         {Store store(path.string());
          for(int round=0;round<20;++round) {
