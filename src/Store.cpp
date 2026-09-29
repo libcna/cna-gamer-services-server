@@ -12,6 +12,7 @@
 #include "RankedArbitrationMigration.hpp"
 #include "SocialMigration.hpp"
 #include "AvatarMigration.hpp"
+#include "AvatarFeatureMigration.hpp"
 #include "SessionRemovalMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -89,10 +90,13 @@ Store::Store(const std::string& path) {
     try {
         sqlite3_busy_timeout(db_,5000);
         exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;");
-        Statement version(db_,"PRAGMA user_version");
-        (void)version.row();
-        const auto current=version.number(0);
-        if (current>13) throw Error("UNSUPPORTED_DATABASE_VERSION");
+        // Read in its own scope: a live statement would keep migrations from dropping tables.
+        const auto current=[&] {
+            Statement version(db_,"PRAGMA user_version");
+            (void)version.row();
+            return version.number(0);
+        }();
+        if (current>14) throw Error("UNSUPPORTED_DATABASE_VERSION");
         if (current==0) {
             exec("BEGIN IMMEDIATE");
             exec(InitialMigration);
@@ -110,6 +114,7 @@ Store::Store(const std::string& path) {
         if(current<11){exec("BEGIN IMMEDIATE");exec(SocialMigration);exec("COMMIT");}
         if(current<12){exec("BEGIN IMMEDIATE");exec(AvatarMigration);exec("COMMIT");}
         if(current<13){exec("BEGIN IMMEDIATE");exec(SessionRemovalMigration);exec("COMMIT");}
+        if(current<14){exec("BEGIN IMMEDIATE");exec(AvatarFeatureMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

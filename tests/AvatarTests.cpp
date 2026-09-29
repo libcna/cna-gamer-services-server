@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "AvatarFixtures.hpp"
 #include "CnaService/Avatars.hpp"
 #include "CnaService/Service.hpp"
 #include <array>
@@ -12,30 +13,31 @@ Json call(Service& service,const std::string& op,const Json& args,const std::str
     static int sequence=0;
     return parse(service.handle(Json{{"v",1},{"id","avatar-"+std::to_string(++sequence)},{"op",op},{"game",title},{"token",token},{"args",args}}.dump(),"avatar-test"));
 }
-std::string glb(char tag) {
-    std::string bytes("glTF\x02\x00\x00\x00\x00\x00\x00\x00",12);bytes+=std::string(20,tag);
-    const auto size=static_cast<unsigned>(bytes.size());for(int i=0;i<4;++i)bytes[8+i]=static_cast<char>((size>>(8*i))&0xff);
-    return bytes;
-}
-std::string png() {
-    return std::string("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x04\x00\x00\x00\x01\x40\x08\x06\x00\x00\x00",33);
+// Valid minimal models: each name gets distinct contents, the male rig differs from the female one.
+std::string glb(const std::string& tag,int clips=0,float scale=1.0f) {
+    auto g=Fixtures::avatarGlb(tag,clips,scale);
+    return g.build();
 }
 struct Catalog {std::string manifest;std::map<std::string,std::string> files;};
 Catalog catalog(int version,const std::vector<std::pair<int,std::string>>& items,char tag='a') {
     Catalog c;
     auto add=[&](const std::string& name,const std::string& bytes){c.files[name]=bytes;};
-    add("body.female.glb",glb('f'));add("body.male.glb",glb('m'));add("face_features.png",png());add("animations.glb",glb('x'));
-    Json list=Json::array();
+    add("body.female.glb",glb("female"));add("body.male.glb",glb("male",0,1.1f));add("face_features.png",Fixtures::atlasPng());
+    add("animations.glb",glb("animations",31));
+    Json list=Json::array(), features=Json::array();
     for(const auto& [id,slot]:items) {
         const auto name="item"+std::to_string(id);
-        add(name+".female.glb",glb(tag));add(name+".male.glb",glb(static_cast<char>(tag+1)));
-        list.push_back(Json{{"id",id},{"slot",slot},{"name",name},{"assets",{{"female",name+".female.glb"},{"male",name+".male.glb"}}}});
+        add(name+".female.glb",glb(name+"f"+tag));add(name+".male.glb",glb(name+"m"+tag,0,1.1f));
+        (slot=="facialHair"?features:list).push_back(Json{{"id",id},{"slot",slot},{"name",name},
+            {"assets",{{"female",name+".female.glb"},{"male",name+".male.glb"}}}});
     }
     Json assets=Json::array();
     for(const auto& [name,bytes]:c.files)assets.push_back(Json{{"name",name},{"sha256",sha256(bytes)},{"size",bytes.size()}});
-    c.manifest=Json{{"format",1},{"catalogVersion",version},{"rig","cna-avatar-71"},{"assets",assets},{"items",list},
+    Json manifest{{"format",1},{"catalogVersion",version},{"rig","cna-avatar-71"},{"assets",assets},{"items",list},
         {"bodies",{{"female",{{"asset","body.female.glb"},{"authoredHeightMillimeters",1680}}},{"male",{{"asset","body.male.glb"},{"authoredHeightMillimeters",1800}}}}},
-        {"face",{{"asset","face_features.png"},{"layout",Json::object()}}},{"animations",{{"asset","animations.glb"},{"presets",Json::array()}}}}.dump();
+        {"face",{{"asset","face_features.png"},{"layout",Fixtures::atlasLayout()}}},{"animations",{{"asset","animations.glb"},{"presets",Json::array()}}}};
+    if(!features.empty())manifest["featureItems"]=features;
+    c.manifest=manifest.dump();
     return c;
 }
 std::string description(int version,std::array<int,6> items,int body=1,int height=1800) {
@@ -64,7 +66,7 @@ int main() {
         std::array<std::string,2> users;
         {Store store(path.string());store.title("one","One");store.title("two","Two");
          users[0]=store.user("alice","alice-password","Alice");users[1]=store.user("bob","bob-password","Bob");
-         Statement version(store.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==13,"schema 13");}
+         Statement version(store.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==14,"schema 14");}
         Service service(path.string());std::array<std::string,2> tokens;
         int index=0;for(const auto* name:{"alice","bob"}) {
             auto login=call(service,"auth.login",{{"username",name},{"password",std::string(name)+"-password"}},{});
@@ -82,7 +84,7 @@ int main() {
         // Import validation.
         const std::vector<std::pair<int,std::string>> v1{{1,"hair"},{2,"hair"},{20,"top"},{40,"bottom"},{60,"shoes"},{80,"glasses"},{100,"hat"}};
         {Store store(path.string());
-         auto bad=catalog(1,v1);bad.files["body.male.glb"]=glb('z');
+         auto bad=catalog(1,v1);bad.files["body.male.glb"]=glb("z",0,1.1f);
          bool refused=false;try{importAvatarCatalog(store,bad.manifest,bad.files);}catch(const Error& e){refused=e.code()=="INVALID_ARGUMENT";}
          check(refused,"hash mismatch refused");
          auto missing=catalog(1,v1);missing.files.erase("animations.glb");
@@ -138,7 +140,9 @@ int main() {
         refuse(description(2,outfit),"catalog not imported");
         refuse(description(1,outfit,1,2100),"height range");
         auto reserved=description(1,outfit);reserved[500]=1;refuse(refreshCrc(reserved),"reserved bytes");
-        auto format=description(1,outfit);format[0]=2;refuse(refreshCrc(format),"format version");
+        auto format=description(1,outfit);format[0]=3;refuse(refreshCrc(format),"format version");
+        auto neutral=description(1,outfit);neutral[0]=2;std::fill(neutral.begin()+45,neutral.begin()+61,static_cast<char>(128));
+        refuse(refreshCrc(neutral),"format 2 must use facial hair or a face shape");
         refuse(description(1,outfit).substr(0,1000),"length");
         check(call(service,"avatars.set",{{"description","zz"+hex(description(1,outfit)).substr(2)}},tokens[1])["error"]=="INVALID_ARGUMENT","hex");
 
@@ -156,6 +160,23 @@ int main() {
         check(call(service,"avatars.catalog",{{"version",7}},tokens[1])["error"]=="NOT_FOUND","unknown version");
         {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");}
         check(call(service,"avatars.set",{{"description",hex(description(1,outfit))}},tokens[1])["error"]=="OK","v1 descriptions stay valid");
+        // Format 2: facial hair must be a feature item of the named catalog; clients that do not
+        // list format 2 get the format 1 copy.
+        {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");
+         auto v3=catalog(3,{{1,"hair"},{2,"hair"},{20,"top"},{40,"bottom"},{60,"shoes"},{80,"glasses"},{100,"hat"},{102,"hat"},
+                            {120,"facialHair"}});
+         check(importAvatarCatalog(store,v3.manifest,v3.files)==3,"catalog v3 with a feature item");}
+        auto shaped=description(3,outfit);shaped[0]=2;shaped[43]=120;shaped[50]=static_cast<char>(200);shaped=refreshCrc(shaped);
+        check(call(service,"avatars.set",{{"description",hex(shaped)}},tokens[1])["error"]=="OK","format 2 stored");
+        auto wrongFeature=shaped;wrongFeature[43]=100;
+        {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");}
+        refuse(refreshCrc(wrongFeature),"facial hair must be a feature item");
+        const auto latest=call(service,"avatars.get",{{"userIds",Json::array({users[1]})},{"formats",{1,2}}},tokens[0])["result"]["avatars"][0];
+        check(latest["description"]==hex(shaped),"a format 2 reader gets format 2");
+        const auto older=call(service,"avatars.get",{{"userIds",Json::array({users[1]})}},tokens[0])["result"]["avatars"][0];
+        auto downgraded=shaped;downgraded[0]=1;std::fill(downgraded.begin()+43,downgraded.begin()+61,'\0');
+        check(older["description"]==hex(refreshCrc(downgraded)),"an older reader gets the format 1 copy");
+        {Store store(path.string());validateAvatarDescription(store.db(),refreshCrc(downgraded));}
         // Versions are exact: a v1 description is checked against v1 alone, and v1 is served as imported.
         {Store store(path.string());store.exec("UPDATE avatars SET updated=updated-5");}
         check(call(service,"avatars.set",{{"description",hex(description(1,{1,20,40,60,0,102}))}},tokens[1])["error"]=="INVALID_ARGUMENT",

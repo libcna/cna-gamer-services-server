@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Avatars.hpp"
+#include "CnaService/AvatarAssets.hpp"
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <random>
 #include <set>
 
 namespace CnaService {
 namespace {
-// CNA v1 layout (CNA docs/avatars.md): version, "CNA", body, height mm, build, catalog version,
-// 7 RGB colors, 6 item ids, zero reserved bytes, CRC-32 of everything before it.
+// CNA description layout (CNA docs/avatars.md). Format 1: version, "CNA", body, height mm, build,
+// catalog version, 7 RGB colors, 6 item ids, zero reserved bytes, CRC-32 of everything before it.
+// Format 2 keeps bytes 1-42 and adds a facial-hair feature item id and 16 face-shape bytes.
 constexpr std::size_t HeightOffset=5, CatalogOffset=8, ColorOffset=10, ItemOffset=31, ReservedOffset=43,
+    FacialHairOffset=43, FaceOffset=45, FaceCount=16, FaceReservedOffset=FaceOffset+FaceCount,
     ChecksumOffset=AvatarDescriptionSize-4;
-constexpr std::array<std::string_view,6> Slots{"hair","top","bottom","shoes","glasses","hat"};
+// Item slots; slot 6 holds a catalog's feature items (facial hair).
+constexpr std::array<std::string_view,7> Slots{"hair","top","bottom","shoes","glasses","hat","facialHair"};
+constexpr int FacialHairSlot=6;
 constexpr std::size_t MaximumAssetBytes=8u<<20;
 
 unsigned read16(std::string_view bytes,std::size_t at)
@@ -37,6 +43,12 @@ void checkFile(std::string_view name,std::string_view bytes)
     } else throw Error("INVALID_ARGUMENT");
 }
 
+void setChecksum(std::string& d)
+{
+    const auto crc=crc32(std::string_view(d).substr(0,ChecksumOffset));
+    for(int i=0;i<4;++i)d[ChecksumOffset+i]=static_cast<char>((crc>>(8*i))&0xff);
+}
+
 // Palettes the administration generator draws from; a description may carry any RGB value.
 constexpr std::array<std::array<int,3>,8> SkinTones{{{255,224,196},{241,194,160},{224,172,128},{198,134,90},{160,104,68},{120,78,52},{92,58,40},{255,210,180}}};
 constexpr std::array<std::array<int,3>,8> HairColors{{{36,28,24},{74,48,30},{120,78,40},{176,122,62},{226,188,116},{160,60,36},{200,200,196},{60,64,120}}};
@@ -57,22 +69,50 @@ std::uint32_t crc32(std::string_view bytes)
 
 void validateAvatarDescription(sqlite3* db,std::string_view d)
 {
-    if(d.size()!=AvatarDescriptionSize||d[0]!=1||d.substr(1,3)!="CNA"||static_cast<unsigned char>(d[4])>1)throw Error("INVALID_ARGUMENT");
+    if(d.size()!=AvatarDescriptionSize||(d[0]!=1&&d[0]!=2)||d.substr(1,3)!="CNA"||static_cast<unsigned char>(d[4])>1)
+        throw Error("INVALID_ARGUMENT");
+    const bool face=d[0]==2;
     const unsigned height=read16(d,HeightOffset);
     if(height<1450||height>2050)throw Error("INVALID_ARGUMENT");
-    if(std::any_of(d.begin()+ReservedOffset,d.begin()+ChecksumOffset,[](char c){return c!=0;}))throw Error("INVALID_ARGUMENT");
+    if(std::any_of(d.begin()+(face?FaceReservedOffset:ReservedOffset),d.begin()+ChecksumOffset,[](char c){return c!=0;}))
+        throw Error("INVALID_ARGUMENT");
     std::uint32_t stored=0;
     for(int i=3;i>=0;--i)stored=(stored<<8)|static_cast<unsigned char>(d[ChecksumOffset+i]);
     if(stored!=crc32(d.substr(0,ChecksumOffset)))throw Error("INVALID_ARGUMENT");
     const long long version=read16(d,CatalogOffset);
     Statement catalog(db,"SELECT 1 FROM avatar_catalogs WHERE version=?");catalog.bind(1,version);
     if(!catalog.row())throw Error("INVALID_ARGUMENT");
+    auto slotOf=[&](long long id) {
+        Statement item(db,"SELECT slot FROM avatar_catalog_items WHERE version=? AND id=?");item.bind(1,version);item.bind(2,id);
+        return item.row()?item.number(0):-1;
+    };
     for(int slot=0;slot<6;++slot) {
         const long long id=read16(d,ItemOffset+slot*2);
         if(id==0) {if(slot<4)throw Error("INVALID_ARGUMENT");continue;}
-        Statement item(db,"SELECT slot FROM avatar_catalog_items WHERE version=? AND id=?");item.bind(1,version);item.bind(2,id);
-        if(!item.row()||item.number(0)!=slot)throw Error("INVALID_ARGUMENT");
+        if(slotOf(id)!=slot)throw Error("INVALID_ARGUMENT");
     }
+    if(face) {
+        // Format 2 always says something format 1 cannot: facial hair or a shaped face.
+        const long long facial=read16(d,FacialHairOffset);
+        const bool shaped=std::any_of(d.begin()+FaceOffset,d.begin()+FaceReservedOffset,[](char c){return static_cast<unsigned char>(c)!=128;});
+        if(facial==0&&!shaped)throw Error("INVALID_ARGUMENT");
+        if(facial!=0&&slotOf(facial)!=FacialHairSlot)throw Error("INVALID_ARGUMENT");
+    }
+}
+
+std::string formatOneDescription(std::string_view d)
+{
+    std::string out(d);
+    if(out.size()!=AvatarDescriptionSize||out[0]!=2)return out;
+    out[0]=1;
+    std::fill(out.begin()+FacialHairOffset,out.begin()+FaceReservedOffset,'\0');
+    setChecksum(out);
+    return out;
+}
+
+namespace {
+int storeCatalog(Store& store,const Json& manifest,long long version,const std::map<std::string,std::string>& hashes,
+    const std::map<std::string,std::string>& files,const std::map<long long,int>& items);
 }
 
 int importAvatarCatalog(Store& store,std::string_view text,const std::map<std::string,std::string>& files)
@@ -84,6 +124,7 @@ int importAvatarCatalog(Store& store,std::string_view text,const std::map<std::s
     if(!manifest.contains("assets")||!manifest["assets"].is_array()||manifest["assets"].empty()||manifest["assets"].size()>256)
         throw Error("INVALID_ARGUMENT");
     std::map<std::string,std::string> hashes;
+    std::map<std::string,AvatarGlbSummary> models;
     for(const auto& asset:manifest["assets"]) {
         const auto name=stringField(asset,"name",64), hash=stringField(asset,"sha256",64);
         const auto size=integerField(asset,"size",1,MaximumAssetBytes);
@@ -93,23 +134,80 @@ int importAvatarCatalog(Store& store,std::string_view text,const std::map<std::s
         if(file==files.end()||static_cast<long long>(file->second.size())!=size||sha256(file->second)!=hash)
             throw Error("INVALID_ARGUMENT");
         checkFile(name,file->second);
+        // Every model is checked against the contract CNA clients enforce.
+        if(name.ends_with(".glb"))models.emplace(name,validateAvatarGlb(file->second));
         hashes[name]=hash;
     }
-    auto listed=[&](const Json& value) {
+    auto listed=[&](const Json& value)->const std::string& {
         if(!value.is_string()||!hashes.contains(value.get<std::string>()))throw Error("INVALID_ARGUMENT");
+        return value.get_ref<const std::string&>();
     };
-    for(const auto* body:{"female","male"})listed(manifest.at("bodies").at(body).at("asset"));
-    listed(manifest.at("face").at("asset"));
-    listed(manifest.at("animations").at("asset"));
-    if(!manifest.contains("items")||!manifest["items"].is_array()||manifest["items"].size()>1024)throw Error("INVALID_ARGUMENT");
-    std::map<long long,int> items;
-    for(const auto& item:manifest["items"]) {
-        const auto id=integerField(item,"id",1,65535);
-        const auto slot=std::ranges::find(Slots,stringField(item,"slot",16));
-        if(slot==Slots.end()||items.contains(id))throw Error("INVALID_ARGUMENT");
-        items[id]=static_cast<int>(slot-Slots.begin());
-        for(const auto* body:{"female","male"})listed(item.at("assets").at(body));
+    auto model=[&](const Json& value)->const AvatarGlbSummary& {
+        auto found=models.find(listed(value));
+        if(found==models.end())throw Error("INVALID_ARGUMENT");
+        return found->second;
+    };
+    try {
+        std::array<const AvatarGlbSummary*,2> bodies{};
+        for(int body=0;body<2;++body) {
+            const auto& entry=manifest.at("bodies").at(body==0?"female":"male");
+            bodies[body]=&model(entry.at("asset"));
+            if(bodies[body]->primitives==0)throw Error("INVALID_ARGUMENT");
+            const auto authored=integerField(entry,"authoredHeightMillimeters",1450,2050);
+            (void)authored;
+        }
+        // An item a client cannot fit to its body makes the whole avatar unavailable there.
+        auto fitted=[&](const Json& assets) {
+            for(int body=0;body<2;++body) {
+                const auto& item=model(assets.at(body==0?"female":"male"));
+                if(item.primitives==0)throw Error("INVALID_ARGUMENT");
+                for(std::size_t joint=0;joint<AvatarJointCount;++joint)
+                    for(std::size_t k=0;k<3;++k)
+                        if(std::fabs(item.bind[joint][k]-bodies[body]->bind[joint][k])>1e-3f)throw Error("INVALID_ARGUMENT");
+            }
+        };
+        const auto& face=manifest.at("face");
+        validateFaceAtlas(files.at(listed(face.at("asset"))),face.at("layout"));
+        if(model(manifest.at("animations").at("asset")).animations!=31)throw Error("INVALID_ARGUMENT");
+        if(manifest.contains("faceControls"))validateFaceControls(manifest["faceControls"]);
+        std::map<long long,int> items;
+        auto readItems=[&](const char* key,bool feature) {
+            if(!manifest.contains(key))return;
+            if(!manifest[key].is_array()||manifest[key].size()>1024)throw Error("INVALID_ARGUMENT");
+            for(const auto& item:manifest[key]) {
+                const auto id=integerField(item,"id",1,65535);
+                const auto slot=std::ranges::find(Slots,stringField(item,"slot",16));
+                if(slot==Slots.end()||items.contains(id)||(slot-Slots.begin()==FacialHairSlot)!=feature)throw Error("INVALID_ARGUMENT");
+                items[id]=static_cast<int>(slot-Slots.begin());
+                (void)stringField(item,"name",64);
+                fitted(item.at("assets"));
+                if(item.contains("random"))
+                    for(const auto* body:{"female","male"}) {
+                        const double weight=item["random"].at(body).get<double>();
+                        if(!(weight>=0&&weight<=1000))throw Error("INVALID_ARGUMENT");
+                    }
+                if(item.contains("hatAssets")) {
+                    if(slot!=Slots.begin())throw Error("INVALID_ARGUMENT");
+                    fitted(item["hatAssets"]);
+                }
+                if(item.contains("coversHair")&&(slot-Slots.begin()!=5||!item["coversHair"].is_boolean()))throw Error("INVALID_ARGUMENT");
+            }
+        };
+        if(!manifest.contains("items"))throw Error("INVALID_ARGUMENT");
+        readItems("items",false);
+        readItems("featureItems",true);
+        for(int required=0;required<4;++required)
+            if(std::ranges::none_of(items,[&](const auto& entry){return entry.second==required;}))throw Error("INVALID_ARGUMENT");
+        return storeCatalog(store,manifest,version,hashes,files,items);
+    } catch(const Json::exception&) {
+        throw Error("INVALID_ARGUMENT");
     }
+}
+
+namespace {
+int storeCatalog(Store& store,const Json& manifest,long long version,const std::map<std::string,std::string>& hashes,
+    const std::map<std::string,std::string>& files,const std::map<long long,int>& items)
+{
     const auto canonical=manifest.dump();
     store.exec("BEGIN IMMEDIATE");
     try {
@@ -146,23 +244,40 @@ int importAvatarCatalog(Store& store,std::string_view text,const std::map<std::s
     } catch(...) {store.exec("ROLLBACK");throw;}
     return static_cast<int>(version);
 }
+}
 
 std::string randomAvatarDescription(sqlite3* db,std::optional<int> bodyType)
 {
-    Statement latest(db,"SELECT MAX(version) FROM avatar_catalogs");
-    if(!latest.row()||latest.number(0)==0)throw Error("NOT_FOUND");
+    Statement latest(db,"SELECT version,manifest FROM avatar_catalogs ORDER BY version DESC LIMIT 1");
+    if(!latest.row())throw Error("NOT_FOUND");
     const auto version=latest.number(0);
-    std::array<std::vector<long long>,6> bySlot;
-    Statement items(db,"SELECT id,slot FROM avatar_catalog_items WHERE version=? ORDER BY id");items.bind(1,version);
-    while(items.row())bySlot[static_cast<std::size_t>(items.number(1))].push_back(items.number(0));
+    const auto manifest=parse(latest.text(1));
     std::random_device device;std::mt19937 random(device());
     auto pick=[&](const auto& range){return range[std::uniform_int_distribution<std::size_t>(0,range.size()-1)(random)];};
-    std::string d(AvatarDescriptionSize,'\0');
-    d[0]=1;d[1]='C';d[2]='N';d[3]='A';
     const int body=bodyType?*bodyType:std::uniform_int_distribution<int>(0,1)(random);
+    const char* bodyName=body==1?"male":"female";
+    // Items by slot, with the catalog's per-body CreateRandom weights (1 when it has none).
+    std::array<std::pair<std::vector<long long>,std::vector<double>>,7> bySlot;
+    for(const auto* key:{"items","featureItems"}) {
+        if(!manifest.contains(key))continue;
+        for(const auto& item:manifest[key]) {
+            const auto slot=std::ranges::find(Slots,item.at("slot").get<std::string>())-Slots.begin();
+            const double weight=item.contains("random")?item["random"].at(bodyName).get<double>():1.0;
+            if(weight<=0)continue;
+            bySlot[static_cast<std::size_t>(slot)].first.push_back(item.at("id").get<long long>());
+            bySlot[static_cast<std::size_t>(slot)].second.push_back(weight);
+        }
+    }
+    auto choose=[&](std::size_t slot)->long long {
+        const auto& [ids,weights]=bySlot[slot];
+        if(ids.empty())return 0;
+        return ids[std::discrete_distribution<std::size_t>(weights.begin(),weights.end())(random)];
+    };
+    std::string d(AvatarDescriptionSize,'\0');
+    d[1]='C';d[2]='N';d[3]='A';
     d[4]=static_cast<char>(body);
-    const int authored=body==1?1800:1680;
-    const int height=std::uniform_int_distribution<int>(authored-110,authored+110)(random);
+    const int authored=static_cast<int>(manifest.at("bodies").at(bodyName).at("authoredHeightMillimeters").get<long long>());
+    const int height=std::clamp(std::uniform_int_distribution<int>(authored-110,authored+110)(random),1450,2050);
     d[HeightOffset]=static_cast<char>(height&0xff);d[HeightOffset+1]=static_cast<char>(height>>8);
     d[7]=static_cast<char>(std::uniform_int_distribution<int>(72,184)(random));
     d[CatalogOffset]=static_cast<char>(version&0xff);d[CatalogOffset+1]=static_cast<char>(version>>8);
@@ -172,13 +287,28 @@ std::string randomAvatarDescription(sqlite3* db,std::optional<int> bodyType)
         for(int k=0;k<3;++k)d[ColorOffset+c*3+k]=static_cast<char>(colors[c][k]);
     std::bernoulli_distribution sometimes(0.3);
     for(std::size_t slot=0;slot<6;++slot) {
-        long long id=0;
-        if(!bySlot[slot].empty()&&(slot<4||sometimes(random)))id=pick(bySlot[slot]);
+        const long long id=slot<4||sometimes(random)?choose(slot):0;
         if(slot<4&&id==0)throw Error("INVALID_ARGUMENT");
         d[ItemOffset+slot*2]=static_cast<char>(id&0xff);d[ItemOffset+slot*2+1]=static_cast<char>(id>>8);
     }
-    const auto crc=crc32(std::string_view(d).substr(0,ChecksumOffset));
-    for(int i=0;i<4;++i)d[ChecksumOffset+i]=static_cast<char>((crc>>(8*i))&0xff);
+    // A catalog with face controls gets an individual face (format 2), and sometimes facial hair.
+    bool face=false;
+    if(manifest.contains("faceControls")) {
+        std::uniform_real_distribution<double> unit(0.0,1.0);
+        for(std::size_t k=0;k<FaceCount;++k)
+            d[FaceOffset+k]=static_cast<char>(std::clamp(128+static_cast<int>(std::lround((unit(random)+unit(random)-1.0)*120.0)),0,255));
+        face=true;
+    }
+    if(std::bernoulli_distribution(0.35)(random)) {
+        const long long id=choose(FacialHairSlot);
+        d[FacialHairOffset]=static_cast<char>(id&0xff);d[FacialHairOffset+1]=static_cast<char>(id>>8);
+        face=face||id!=0;
+    }
+    if(face&&!std::any_of(d.begin()+FaceOffset,d.begin()+FaceReservedOffset,[](char c){return static_cast<unsigned char>(c)!=128;})&&
+       read16(d,FacialHairOffset)==0)face=false;
+    d[0]=face?2:1;
+    if(!face)std::fill(d.begin()+FacialHairOffset,d.begin()+FaceReservedOffset,'\0');
+    setChecksum(d);
     return d;
 }
 
@@ -240,12 +370,27 @@ Json Service::avatars(const std::string& user,const std::string& op,const Json& 
         if(!a.contains("userIds")||!a["userIds"].is_array()||a["userIds"].empty()||a["userIds"].size()>16)
             throw Error("INVALID_ARGUMENT");
         Json avatars=Json::array();
+        // Clients list the description formats they read; one that does not (or cannot read format
+        // 2) is given the format 1 copy: the same body, colours and items without facial hair or
+        // face shape.
+        bool formatTwo=false;
+        if(a.contains("formats")) {
+            if(!a["formats"].is_array()||a["formats"].size()>8)throw Error("INVALID_ARGUMENT");
+            for(const auto& format:a["formats"]) {
+                if(!format.is_number_integer())throw Error("INVALID_ARGUMENT");
+                formatTwo=formatTwo||format.get<int>()==2;
+            }
+        }
         for(const auto& value:a["userIds"]) {
             if(!value.is_string())throw Error("INVALID_ARGUMENT");
             const auto id=value.get<std::string>();
             if(id.empty()||id.size()>64||id.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
             Statement avatar(store_.db(),"SELECT description,revision FROM avatars WHERE user_id=?");avatar.bind(1,id);
-            if(avatar.row())avatars.push_back(Json{{"userId",id},{"description",hexEncode(avatar.blob(0))},{"revision",avatar.number(1)}});
+            if(avatar.row()) {
+                const auto stored=avatar.blob(0);
+                avatars.push_back(Json{{"userId",id},{"description",hexEncode(formatTwo?stored:formatOneDescription(stored))},
+                                       {"revision",avatar.number(1)}});
+            }
             else avatars.push_back(Json{{"userId",id},{"description",nullptr},{"revision",0}});
         }
         return Json{{"avatars",avatars}};

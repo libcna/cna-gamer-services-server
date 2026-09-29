@@ -1,22 +1,26 @@
 # SPDX-License-Identifier: MIT
 """A CNA process reads and renders service avatars with the standard XNA API.
 
-The service imports CNA's embedded catalog (v1) and a newer v2 with one extra hat. Alice's avatar
-wears that hat, so her CNA client must download it by hash from the service, verify and cache it,
-and still render her avatar without substituting anything.
+The service imports every catalog CNA embeds (v1, v2, ...) and one newer catalog the client does
+not have: the newest plus one extra hat. Alice's avatar is a format 2 description (facial hair and
+a shaped face) wearing that hat, so her CNA client must download the hat by hash, verify and cache
+it, and still render her avatar without substituting anything.
 """
 import json, os, pathlib, shutil, subprocess, sys, tempfile, zlib
 
 
-def description(catalog, items, body=1, height=1760, build=140):
+def description(catalog, items, body=1, height=1760, build=140, facial=0, face=None):
     d = bytearray(1021)
-    d[0] = 1; d[1:4] = b"CNA"; d[4] = body
+    d[0] = 2 if facial or face else 1; d[1:4] = b"CNA"; d[4] = body
     d[5:7] = height.to_bytes(2, "little"); d[7] = build; d[8:10] = catalog.to_bytes(2, "little")
     colors = [(240, 194, 160), (74, 48, 30), (60, 110, 160), (230, 40, 40), (40, 60, 220), (250, 250, 250), (30, 30, 30)]
     for index, color in enumerate(colors):
         d[10 + index * 3:13 + index * 3] = bytes(color)
     for slot, item in enumerate(items):
         d[31 + slot * 2:33 + slot * 2] = item.to_bytes(2, "little")
+    if d[0] == 2:
+        d[43:45] = facial.to_bytes(2, "little")
+        d[45:61] = bytes(face or [128] * 16)
     d[1017:1021] = (zlib.crc32(bytes(d[:1017])) & 0xffffffff).to_bytes(4, "little")
     return bytes(d)
 
@@ -24,12 +28,16 @@ def description(catalog, items, body=1, height=1760, build=140):
 def main():
     build = pathlib.Path(sys.argv[1]).resolve()
     client = os.environ.get("CNA_SERVICE_AVATAR_CLIENT_HARNESS")
-    catalog = os.environ.get("CNA_AVATAR_CATALOG_DIR")
-    if not client or not catalog:
-        print("CNA_SERVICE_AVATAR_CLIENT_HARNESS and CNA_AVATAR_CATALOG_DIR required")
+    catalogs = os.environ.get("CNA_AVATAR_CATALOGS")
+    if not catalogs and os.environ.get("CNA_AVATAR_CATALOG_DIR"):
+        catalogs = str(pathlib.Path(os.environ["CNA_AVATAR_CATALOG_DIR"]).parent)
+    if not client or not catalogs:
+        print("CNA_SERVICE_AVATAR_CLIENT_HARNESS and CNA_AVATAR_CATALOGS (CNA's modules/gamer-services/assets/avatars) required")
         return 77
-    catalog = pathlib.Path(catalog)
-    assert pathlib.Path(client).is_file() and (catalog / "catalog.json").is_file(), "CNA inputs"
+    catalogs = pathlib.Path(catalogs)
+    versions = sorted(int(p.name[1:]) for p in catalogs.glob("v*") if (p / "catalog.json").is_file())
+    assert pathlib.Path(client).is_file() and versions and versions == list(range(1, len(versions) + 1)), "CNA inputs"
+    newest = catalogs / ("v%d" % versions[-1])
     with tempfile.TemporaryDirectory(prefix="cna-avatars-", dir=build) as temp:
         root = pathlib.Path(temp); os.chmod(root, 0o700)
         db = root / "state.sqlite3"; cert = root / "cert.pem"; key = root / "key.pem"
@@ -42,24 +50,30 @@ def main():
         run("title", "one", "One")
         for user in ("alice", "bob", "charlie"):
             run("user", user, user.title(), text=user + "-password\n")
-        assert run("avatar-catalog", str(catalog)) == "1", "catalog v1 import"
-        # v2: everything from v1 plus a crown, a distinct valid GLB derived from the cap.
-        newer = root / "catalog-v2"; shutil.copytree(catalog, newer)
-        manifest = json.loads((catalog / "catalog.json").read_text())
-        manifest["catalogVersion"] = 2
+        for version in versions:
+            assert run("avatar-catalog", str(catalogs / ("v%d" % version))) == str(version), "CNA catalog v%d import" % version
+        # One version past CNA's: its newest catalog plus a crown, a distinct valid GLB derived from the cap.
+        target = versions[-1] + 1
+        newer = root / ("catalog-v%d" % target); shutil.copytree(newest, newer)
+        manifest = json.loads((newest / "catalog.json").read_text())
+        manifest["catalogVersion"] = target
         crown = {}
         for body in ("female", "male"):
-            data = (catalog / ("hat_cap.%s.glb" % body)).read_bytes().replace(b"hat_cap", b"hat_crn")
+            data = (newest / ("hat_cap.%s.glb" % body)).read_bytes().replace(b"hat_cap", b"hat_crn")
             name = "hat_crown.%s.glb" % body
             (newer / name).write_bytes(data)
             import hashlib
             crown[body] = hashlib.sha256(data).hexdigest()
             manifest["assets"].append({"name": name, "sha256": crown[body], "size": len(data)})
-        manifest["items"].append({"id": 102, "slot": "hat", "name": "hat_crown",
+        crown_id = max(i["id"] for i in manifest["items"] + manifest.get("featureItems", [])) + 1
+        manifest["items"].append({"id": crown_id, "slot": "hat", "name": "hat_crown",
                                   "assets": {"female": "hat_crown.female.glb", "male": "hat_crown.male.glb"}})
         (newer / "catalog.json").write_text(json.dumps(manifest))
-        assert run("avatar-catalog", str(newer)) == "2", "catalog v2 import"
-        run("avatar", "alice", "set", text=description(2, [1, 20, 40, 60, 0, 102]).hex() + "\n")
+        assert run("avatar-catalog", str(newer)) == str(target), "newer catalog import"
+        beard = next((i["id"] for i in manifest.get("featureItems", [])), 0)
+        face = [128] * 16; face[5] = 210; face[0] = 90
+        own = description(target, [1, 20, 40, 60, 0, crown_id], facial=beard, face=face)
+        run("avatar", "alice", "set", text=own.hex() + "\n")
         run("avatar", "bob", "random", "female")
         server = subprocess.Popen([str(build / "cna-gamer-services-server"), "--database", str(db), "--listen", "127.0.0.1",
                                    "--port", "0", "--cert", str(cert), "--key", str(key)], stdout=subprocess.PIPE, text=True)
@@ -75,7 +89,7 @@ def main():
                 result = subprocess.run([client], input="alice-password\n", text=True, capture_output=True, env=env, timeout=120)
                 assert result.returncode == 0, "avatar client %s run: %s" % (attempt, result.stderr.strip())
                 lines = dict(l.split(" ", 1) for l in result.stdout.splitlines() if l.startswith("avatar-"))
-                assert lines.get("avatar-own") == "valid=1 body=1 height=1760 catalog=2", lines
+                assert lines.get("avatar-own") == "valid=1 body=1 height=1760 catalog=%d" % target, lines
                 assert lines.get("avatar-lookup", "").startswith("valid=1 body=0 "), lines
                 assert lines.get("avatar-none") == "valid=0 body=0 height=0 catalog=0", lines
                 assert lines.get("avatar-ready") == "substituted=0", lines
@@ -85,7 +99,8 @@ def main():
                 print(attempt, "run:", result.stdout.strip().replace("\n", "; "))
         finally:
             server.terminate(); server.wait(timeout=10); server.stdout.close()
-    print("Standard XNA avatars over the CNA service: own/looked-up/absent descriptions, catalog v2 item fetched by hash, cached, rendered Ready.")
+    print("Standard XNA avatars over the CNA service: every CNA catalog imported; a format 2 avatar on catalog v%d; "
+          "own/looked-up/absent descriptions; the one missing item fetched by hash, cached, rendered Ready." % target)
     return 0
 
 

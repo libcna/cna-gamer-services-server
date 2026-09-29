@@ -370,11 +370,13 @@ cna-gamer-services-admin state.sqlite3 avatar alice random male     # or: female
 
 Catalog files are served from the immutable asset store by hash, so a CNA client that lacks an
 item of a newer catalog downloads, verifies and caches just that file. `service_cna_avatars` proves
-it with the standard XNA API: own, looked-up and absent descriptions, and a v2-only item fetched,
-cached and rendered Ready:
+it with the standard XNA API: every catalog CNA embeds is imported, then one newer catalog with an
+extra hat; a format 2 avatar wearing that hat is read, only the hat is fetched and cached, and the
+avatar renders Ready. `service_avatar_validation` imports the same CNA catalogs as golden fixtures
+and refuses a long list of malformed models and manifests:
 
 ```sh
 CNA_SERVICE_AVATAR_CLIENT_HARNESS=/absolute/CNA/build/cna_service_avatar_client_harness \
-CNA_AVATAR_CATALOG_DIR=/absolute/CNA/modules/gamer-services/assets/avatars/v1 \
-ctest --test-dir build -R '^service_cna_avatars$' --output-on-failure
+CNA_AVATAR_CATALOGS=/absolute/CNA/modules/gamer-services/assets/avatars \
+ctest --test-dir build -R 'avatar' --output-on-failure
 ```
