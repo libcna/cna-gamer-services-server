@@ -66,7 +66,7 @@ int main() {
         std::array<std::string,2> users;
         {Store store(path.string());store.title("one","One");store.title("two","Two");
          users[0]=store.user("alice","alice-password","Alice");users[1]=store.user("bob","bob-password","Bob");
-         Statement version(store.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==14,"schema 14");}
+         Statement version(store.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==SchemaVersion,"current schema");}
         Service service(path.string());std::array<std::string,2> tokens;
         int index=0;for(const auto* name:{"alice","bob"}) {
             auto login=call(service,"auth.login",{{"username",name},{"password",std::string(name)+"-password"}},{});

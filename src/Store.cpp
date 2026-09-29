@@ -96,7 +96,7 @@ Store::Store(const std::string& path) {
             (void)version.row();
             return version.number(0);
         }();
-        if (current>14) throw Error("UNSUPPORTED_DATABASE_VERSION");
+        if (current>SchemaVersion) throw Error("UNSUPPORTED_DATABASE_VERSION");
         if (current==0) {
             exec("BEGIN IMMEDIATE");
             exec(InitialMigration);
