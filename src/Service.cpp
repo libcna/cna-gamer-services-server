@@ -3,6 +3,7 @@
 #include <openssl/crypto.h>
 #include <cmath>
 #include <set>
+#include <utility>
 
 namespace CnaService {
 namespace {
@@ -38,15 +39,19 @@ private:
 }
 Service::Service(const std::string& database):store_(database) {store_.exec("PRAGMA synchronous=NORMAL");}
 std::string Service::handle(std::string_view bytes,std::string_view peer) {
-    std::string id;
+    std::string id,code="OK",result;
     try {
         const auto request=parse(bytes);validateRequest(request);id=stringField(request,"id",64);
         std::unique_lock lock(mutex_);
-        auto result=response(id,"OK",dispatch(request,std::string(peer),lock)).dump();
+        result=response(id,"OK",dispatch(request,std::string(peer),lock)).dump();
         if (result.size()>MaxMessageBytes) throw Error("LIMIT_EXCEEDED");
-        return result;
-    } catch (const Error& e) { return response(id,e.code()).dump(); }
-      catch (...) { return response(id,"INTERNAL_ERROR").dump(); }
+    } catch (const Error& e) { code=e.code();result=response(id,code).dump(); }
+      catch (...) { code="INTERNAL_ERROR";result=response(id,code).dump(); }
+    std::lock_guard counting(outcomesMutex_);++outcomes_[code];
+    return result;
+}
+std::map<std::string,unsigned long long> Service::takeOutcomes() {
+    std::lock_guard counting(outcomesMutex_);return std::exchange(outcomes_,{});
 }
 Json Service::identity(const std::string& id) {
     Statement s(store_.db(),"SELECT id,gamertag,motto,region,online_allowed,picture,gamer_zone FROM users WHERE id=?");s.bind(1,id);

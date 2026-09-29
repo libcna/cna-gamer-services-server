@@ -31,6 +31,8 @@ public:
     /** @brief Routes within the same title/session. @param grant Source authority.
      * @param destination Service machine. @param frame Source-injected bytes. */
     void route(const RelayGrant& grant,const std::string& destination,std::vector<unsigned char> frame);
+    /** @brief Counts attached machines. @return Live channels. */
+    std::size_t size();
 private:
     using Key=std::tuple<std::string,std::string,std::string>;
     std::mutex mutex_;

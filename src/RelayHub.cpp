@@ -22,4 +22,9 @@ void RelayHub::route(const RelayGrant& grant,const std::string& destination,std:
     }
     if(target)target->offer(std::move(frame));
 }
+std::size_t RelayHub::size() {
+    std::lock_guard lock(mutex_);
+    std::erase_if(channels_,[](const auto& item){return item.second.expired();});
+    return channels_.size();
+}
 }

@@ -14,6 +14,9 @@ public:
      * @param bytes Request bytes. @param peer Server-derived source identity.
      * @return Response bytes. */
     std::string handle(std::string_view bytes,std::string_view peer);
+    /** @brief Takes the count of responses per error code since the previous call, for the
+     * operator's periodic statistics. @return Code to count; OK included. */
+    std::map<std::string,unsigned long long> takeOutcomes();
     /** @brief Redeems short-lived one-use authority on an encrypted relay connection.
      * @param game Title. @param ticket Secret from HTTPS; never logged. @return Server-owned grant. */
     RelayGrant redeemRelayTicket(const std::string& game,const std::string& ticket);
@@ -51,6 +54,8 @@ private:
     struct Rate { long long start=0; int count=0; };
     std::map<std::string,Rate> loginRates_;
     long long lastTrim_=0;
+    std::mutex outcomesMutex_;
+    std::map<std::string,unsigned long long> outcomes_;
     std::map<std::string,long long> requestIdCounts_;
     std::map<std::string,Rate> requestBudgets_;
 };

@@ -9,6 +9,8 @@
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <algorithm>
+#include <sstream>
+#include <utility>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -54,9 +56,11 @@ public:
     bool admit(const std::string& peer) {
         std::lock_guard lock(mutex_);
         const auto held=peers_.find(peer);
-        if(control_>=MaxControlConnections||(held!=peers_.end()&&held->second>=MaxPeerConnections))return false;
+        if(control_>=MaxControlConnections||(held!=peers_.end()&&held->second>=MaxPeerConnections)){++refused_;return false;}
         ++peers_[peer];++control_;return true;
     }
+    /** Open control connections, and refusals since the previous call. */
+    std::pair<int,unsigned long long> take() {std::lock_guard lock(mutex_);return {control_,std::exchange(refused_,0)};}
     void leave(const std::string& peer) {
         std::lock_guard lock(mutex_);
         --control_;if(const auto held=peers_.find(peer);held!=peers_.end()&&--held->second<=0)peers_.erase(held);
@@ -65,7 +69,22 @@ private:
     std::mutex mutex_;
     std::map<std::string,int> peers_;
     int control_=0;
+    unsigned long long refused_=0;
 };
+// One line a minute for the operator: responses per error code, refused connections, open
+// control connections and attached relays. Never a credential, address or request body.
+net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub) {
+    net::steady_timer timer(co_await net::this_coro::executor);
+    while(true) {
+        timer.expires_after(std::chrono::minutes(1));
+        co_await timer.async_wait(net::use_awaitable);
+        std::ostringstream line;line<<"stats";
+        for(const auto& [code,count]:service.takeOutcomes())line<<' '<<code<<'='<<count;
+        const auto [control,refused]=admission.take();
+        line<<" refused="<<refused<<" control="<<control<<" relays="<<hub.size();
+        std::cout<<line.str()<<std::endl;
+    }
+}
 class ConnectionLease {
 public:
     ConnectionLease(Admission& admission,std::string peer):admission_(admission),peer_(std::move(peer)) {}
@@ -170,6 +189,7 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     net::signal_set signals(io,SIGINT,SIGTERM);signals.async_wait([&](auto,int){io.stop();});
     Workers workers;Admission admission;
     net::co_spawn(io,accept(acceptor,admission,tls,service,hub,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
+    net::co_spawn(io,report(service,admission,hub),net::detached);
     std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
     std::jthread worker([&]{io.run();});io.run();worker.join();
     workers.requests.join();workers.signIns.join();
