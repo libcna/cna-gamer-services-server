@@ -98,9 +98,11 @@ private:
     bool held_=true;
 };
 // A client may send further requests on the same connection, saving a TLS handshake each: the
-// next one must start within 15 s, and a connection serves at most 1000.
+// next one must start within 5 s, and a connection serves at most 1000. Five seconds keeps a
+// burst (sign-in, a catalog download) on one connection but frees an idle one long before the
+// next heartbeat, so many players behind one NAT address fit within its admission share.
 constexpr int MaxRequestsPerConnection=1000;
-constexpr std::chrono::seconds KeepAliveIdle{15};
+constexpr std::chrono::seconds KeepAliveIdle{5};
 template<class Stream>
 net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer,ConnectionLease& lease) {
     beast::flat_buffer buffer;

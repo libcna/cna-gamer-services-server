@@ -94,8 +94,9 @@ last moments of leases, presence and request bookkeeping. Everything a player wo
 with `synchronous=FULL`.
 
 **Limits.** 256 control connections, at most 32 from one address; 1024 authenticated relay
-machines, counted apart. A connection carries up to 1000 requests, idling at most 15 s between
-them. Sign-in and refresh: 10 per minute per address. Messages up to 64 KiB. Request IDs that
+machines, counted apart. A connection carries up to 1000 requests, idling at most 5 s between
+them; a CNA client holds one only around its bursts, so an address's 32 connections are shared by
+the players behind one NAT address rather than owned by 32 of them. Sign-in and refresh: 10 per minute per address. Messages up to 64 KiB. Request IDs that
 guard mutations against replay: 1,000,000 per title and 20,000 per account per day (reads,
 heartbeats, lease and presence updates record none). Past 32 live sign-ins an account's oldest
 refresh family is signed out. The server raises its descriptor limit to what the host allows
@@ -163,6 +164,7 @@ derivation.
 | The per-account request budget lives in memory and starts over when the server restarts | Retained |
 | A new TLS certificate needs a restart (clients and relays reconnect) | Retained |
 | Clients poll; there is no push | Retained |
+| Players behind one NAT address share its 32 control connections and its 10 sign-ins a minute (a LAN party signing in at once waits) | Retained: per-address limits are the flood protection; keep-alive idles only 5 s |
 
 ## Tests
 
