@@ -84,11 +84,13 @@ int main() {
             read["size"]=0;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board zero page");read["size"]=101;check(call(s,"one","leaderboards.read",read,alice)["error"]=="INVALID_ARGUMENT","board page cap");read["size"]=1;read["mode"]=99;check(call(s,"one","leaderboards.read",read,alice)["error"]=="NOT_FOUND","missing board");
             check(call(s,"two","achievements.list",Json::object(),alice)["error"]=="UNAUTHENTICATED","token isolation");
             check(call(s,"one","achievements.award",{{"key","absent"}},alice)["error"]=="NOT_FOUND","invalid award");
-            check(call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate")["error"]=="OK","award");
+            auto awarded=call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate");
+            check(awarded["error"]=="OK"&&awarded["result"]["awarded"]==true&&awarded["result"]["name"]=="First","award, newly earned, with its name");
             check(call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate")["error"]=="DUPLICATE_REQUEST","duplicate request");
             auto ticks=call(s,"one","achievements.list",Json::object(),alice)["result"]["achievements"][0]["earnedTicks"];
             check(ticks>0,"timestamp");
-            check(call(s,"one","achievements.award",{{"key","first"}},alice)["error"]=="OK","repeat award");
+            auto repeat=call(s,"one","achievements.award",{{"key","first"}},alice);
+            check(repeat["error"]=="OK"&&repeat["result"]["awarded"]==false,"repeat award earns nothing new");
             check(call(s,"one","achievements.list",Json::object(),alice)["result"]["achievements"][0]["earnedTicks"]==ticks,"unchanged timestamp");
             for(auto pair:{std::pair{"one",bob},std::pair{"two",other}})
                 check(call(s,pair.first,"achievements.list",Json::object(),pair.second)["result"]["achievements"][0]["earnedTicks"]==0,"user/title earned isolation");

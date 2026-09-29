@@ -247,10 +247,12 @@ Json Service::dispatch(const Json& r,const std::string& peer) {
     }
     if (op=="achievements.award") {
         const auto key=stringField(a,"key",64);if(!identifier(key))throw Error("INVALID_ARGUMENT");
-        Statement definition(store_.db(),"SELECT key FROM achievements WHERE game_id=? AND key=?");definition.bind(1,game);definition.bind(2,key);
+        Statement definition(store_.db(),"SELECT key,name FROM achievements WHERE game_id=? AND key=?");definition.bind(1,game);definition.bind(2,key);
         if(!definition.row())throw Error("NOT_FOUND");
         Statement s(store_.db(),"INSERT OR IGNORE INTO earned(user_id,game_id,key,ticks) VALUES(?,?,?,?)");
-        s.bind(1,user);s.bind(2,game);s.bind(3,key);s.bind(4,(timestamp+62135596800LL)*10000000LL);(void)s.row();return Json::object();
+        s.bind(1,user);s.bind(2,game);s.bind(3,key);s.bind(4,(timestamp+62135596800LL)*10000000LL);(void)s.row();
+        // Whether this call earned it (a client shows "achievement unlocked" once), and its name.
+        return Json{{"awarded",sqlite3_changes(store_.db())>0},{"name",definition.text(1)}};
     }
     Statement s(store_.db(),"SELECT a.key,a.name,a.description,a.how_to_earn,a.score,a.display,a.picture,COALESCE(e.ticks,0) FROM achievements a LEFT JOIN earned e ON e.game_id=a.game_id AND e.key=a.key AND e.user_id=? WHERE a.game_id=? ORDER BY a.key LIMIT 129");
     s.bind(1,user);s.bind(2,game);Json achievements=Json::array();
