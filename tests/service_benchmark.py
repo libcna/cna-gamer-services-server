@@ -234,11 +234,13 @@ def provision(build, root, players):
     return ca, key, db
 
 
-def fill_request_ids(db, count):
+def fill_request_ids(db, target):
+    # Tops the title's request-ID table up to the target, as if the day had already been busy.
     with sqlite3.connect(db) as connection:
         now = int(time.time())
+        present = connection.execute("SELECT COUNT(*) FROM request_ids WHERE game_id=?", (TITLE,)).fetchone()[0]
         connection.executemany("INSERT INTO request_ids(game_id,id,created) VALUES(?,?,?)",
-                               ((TITLE, f"fill-{index}", now - 3600) for index in range(count)))
+                               ((TITLE, f"fill-{index}", now - 3600) for index in range(max(0, target - present))))
 
 
 def main():

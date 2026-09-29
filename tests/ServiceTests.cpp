@@ -95,6 +95,11 @@ int main() {
             auto awarded=call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate");
             check(awarded["error"]=="OK"&&awarded["result"]["awarded"]==true&&awarded["result"]["name"]=="First","award, newly earned, with its name");
             check(call(s,"one","achievements.award",{{"key","first"}},alice,"duplicate")["error"]=="DUPLICATE_REQUEST","duplicate request");
+            // A read, the heartbeat and presence repeat harmlessly and record no ID.
+            check(call(s,"one","achievements.list",Json::object(),alice,"repeated-read")["error"]=="OK"&&
+                  call(s,"one","achievements.list",Json::object(),alice,"repeated-read")["error"]=="OK","repeated read ID");
+            check(call(s,"one","auth.ping",Json::object(),alice,"repeated-ping")["error"]=="OK"&&
+                  call(s,"one","auth.ping",Json::object(),alice,"repeated-ping")["error"]=="OK","repeated heartbeat ID");
             auto ticks=call(s,"one","achievements.list",Json::object(),alice)["result"]["achievements"][0]["earnedTicks"];
             check(ticks>0,"timestamp");
             auto repeat=call(s,"one","achievements.award",{{"key","first"}},alice);
@@ -240,6 +245,18 @@ int main() {
             check(call(s,"one","auth.refresh",{{"refreshToken","malformed"}})["error"]=="UNAUTHENTICATED","malformed refresh rejected");
             for(int i=0;i<6;++i)check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="UNAUTHENTICATED","refresh throttle threshold");
             check(call(s,"one","auth.refresh",{{"refreshToken",std::string(64,'0')}})["error"]=="RATE_LIMITED","refresh source rate limit");
+        }
+        {
+            // One account's mutations cannot spend the title's request-ID budget for everyone else.
+            Service s(path.string());
+            const auto spender=call(s,"two","auth.login",{{"username","bob"},{"password","bob-password"}})["result"]["token"].get<std::string>();
+            const auto bystander=call(s,"two","auth.login",{{"username","alice"},{"password","alice-password"}})["result"]["token"].get<std::string>();
+            const Json leave{{"session",std::string(32,'0')}};
+            int spent=0;
+            while(spent<20001&&call(s,"two","sessions.leave",leave,spender)["error"]!="RATE_LIMITED")++spent;
+            check(spent==20000,"account request-ID budget");
+            check(call(s,"two","sessions.leave",leave,bystander)["error"]!="RATE_LIMITED","other accounts keep the title's budget");
+            check(call(s,"two","auth.ping",Json::object(),spender)["error"]=="OK","unrecorded requests are outside the budget");
         }
         {Store db(path.string());db.exec("ALTER TABLE users DROP COLUMN gamer_zone; ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; DROP TABLE relay_ticket_members; DROP TABLE relay_tickets; DROP TABLE invitation_send_limits; DROP TABLE session_invitations; DROP TABLE directory_members; DROP TABLE directory_machines; DROP TABLE directory_sessions; DROP TABLE refresh_credentials; DROP INDEX sessions_refresh_family; ALTER TABLE sessions DROP COLUMN refresh_family; DROP TABLE refresh_families; DROP TABLE leaderboard_game_members; DROP TABLE leaderboard_games; DROP TABLE leaderboard_entries; DROP TABLE leaderboards; DROP TABLE title_assets; DROP TABLE assets; ALTER TABLE users DROP COLUMN picture; PRAGMA user_version=1;");}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");(void)version.row();check(version.number(0)==SchemaVersion,"v1 database migration");Statement users(upgraded.db(),"SELECT COUNT(*) FROM users");(void)users.row();check(users.number(0)==2,"migration preserves identities");}

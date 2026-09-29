@@ -50,5 +50,8 @@ private:
     std::mutex mutex_;
     struct Rate { long long start=0; int count=0; };
     std::map<std::string,Rate> loginRates_;
+    long long lastTrim_=0;
+    std::map<std::string,long long> requestIdCounts_;
+    std::map<std::string,Rate> requestBudgets_;
 };
 }

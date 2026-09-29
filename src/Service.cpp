@@ -5,7 +5,38 @@
 #include <set>
 
 namespace CnaService {
-Service::Service(const std::string& database):store_(database) {}
+namespace {
+// Leases, presence, relay tickets and the per-request bookkeeping are rebuilt within seconds of
+// a crash, so they commit without waiting for the disk. Everything a player would miss after a
+// power loss -- credentials and revocations, awards, scores, friends, messages, profile and
+// avatar edits -- commits with a full sync.
+const std::set<std::string> Ephemeral{"auth.ping","gamer.lookup","profile.get","profile.gameDefaults","friends.list",
+    "presence.set","achievements.list","assets.read","leaderboards.read","leaderboards.definition","sessions.relayTicket",
+    "sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited",
+    "sessions.leave","sessions.remove","sessions.addMembers","invites.list","invites.get","messages.list","avatars.get","avatars.catalog"};
+// Replay protection is for requests whose repetition would change something twice. Reads, and
+// writes that replace a value outright and recur on a timer (heartbeat, lease, presence), repeat
+// harmlessly; recording them would spend a title's daily budget on its own keep-alive traffic.
+const std::set<std::string> Unrecorded{"auth.ping","sessions.touch","presence.set","presence.status","gamer.lookup",
+    "profile.get","profile.gameDefaults","friends.list","achievements.list","assets.read","leaderboards.read",
+    "leaderboards.definition","sessions.find","sessions.get","invites.list","invites.get","messages.list","avatars.get",
+    "avatars.catalog"};
+// Recorded request IDs per title and 24 hours: the storage backstop.
+constexpr long long MaxTitleRequestIds=1000000;
+// Recorded request IDs per account, title and 24-hour window, so that no one account can spend
+// the title's budget for everyone else.
+constexpr int MaxAccountRequestIds=20000;
+class DurableScope {
+public:
+    DurableScope(Store& store,bool durable):store_(durable?&store:nullptr) {if(store_)store_->exec("PRAGMA synchronous=FULL");}
+    ~DurableScope() {if(store_)try{store_->exec("PRAGMA synchronous=NORMAL");}catch(...){}}
+    DurableScope(const DurableScope&)=delete;
+    DurableScope& operator=(const DurableScope&)=delete;
+private:
+    Store* store_;
+};
+}
+Service::Service(const std::string& database):store_(database) {store_.exec("PRAGMA synchronous=NORMAL");}
 std::string Service::handle(std::string_view bytes,std::string_view peer) {
     std::string id;
     try {
@@ -44,16 +75,15 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","session-directory","session-removal","host-migration","session-add-members","session-invitations","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
-    std::string user;
+    std::string user,token;
     const auto timestamp=now();
     if (op!="auth.login"&&op!="auth.refresh") {
-        const auto token=stringField(r,"token",128);
+        token=stringField(r,"token",128);
         if (token.size()!=64) throw Error("UNAUTHENTICATED");
         Statement session(store_.db(),"SELECT user_id FROM sessions WHERE hash=? AND game_id=? AND expires>?");
         session.bind(1,sha256(token));session.bind(2,game);session.bind(3,timestamp);
         if (!session.row()) throw Error("UNAUTHENTICATED");
         user=session.text(0);
-        Statement seen(store_.db(),"UPDATE sessions SET last_seen=? WHERE hash=?");seen.bind(1,timestamp);seen.bind(2,sha256(token));(void)seen.row();
     }
     if (op=="auth.login"||op=="auth.refresh") {
         for (auto it=loginRates_.begin();it!=loginRates_.end();) {
@@ -62,11 +92,44 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
         if (loginRates_.size()>=4096 && !loginRates_.contains(peer)) throw Error("RATE_LIMITED");
         auto& rate=loginRates_[peer];if (rate.count++>=10) throw Error("RATE_LIMITED");if (!rate.start) rate.start=timestamp;
     }
-    Statement trim(store_.db(),"DELETE FROM request_ids WHERE created<?");trim.bind(1,timestamp-86400);(void)trim.row();
-    Statement count(store_.db(),"SELECT COUNT(*) FROM request_ids WHERE game_id=?");count.bind(1,game);(void)count.row();
-    if (count.number(0)>=100000) throw Error("LIMIT_EXCEEDED");
-    try { Statement nonce(store_.db(),"INSERT INTO request_ids(game_id,id,created) VALUES(?,?,?)");nonce.bind(1,game);nonce.bind(2,id);nonce.bind(3,timestamp);(void)nonce.row(); }
-    catch (const Error& e) { if (e.code()=="CONFLICT") throw Error("DUPLICATE_REQUEST");throw; }
+    // The request's own bookkeeping is one write transaction.
+    store_.exec("BEGIN IMMEDIATE");
+    try {
+        if (!token.empty()) {
+            // Friends see a member online for 90 s after the last request. Fifteen seconds of slack
+            // spares a write on nearly every request; the 30 s heartbeat always refreshes it.
+            Statement seen(store_.db(),"UPDATE sessions SET last_seen=?1 WHERE hash=?2 AND last_seen<?1-15");
+            seen.bind(1,timestamp);seen.bind(2,sha256(token));(void)seen.row();
+        }
+        const bool recorded=!Unrecorded.contains(op);
+        if (recorded) {
+            if (timestamp-lastTrim_>=60) {
+                Statement trim(store_.db(),"DELETE FROM request_ids WHERE created<?");trim.bind(1,timestamp-86400);(void)trim.row();
+                lastTrim_=timestamp;requestIdCounts_.clear();
+                std::erase_if(requestBudgets_,[&](const auto& entry){return timestamp-entry.second.start>=86400;});
+            }
+            // Counted once per title and minute, then kept in memory, instead of on every request.
+            auto counted=requestIdCounts_.find(game);
+            if (counted==requestIdCounts_.end()) {
+                Statement count(store_.db(),"SELECT COUNT(*) FROM request_ids WHERE game_id=?");count.bind(1,game);(void)count.row();
+                counted=requestIdCounts_.emplace(game,count.number(0)).first;
+            }
+            if (counted->second>=MaxTitleRequestIds) throw Error("LIMIT_EXCEEDED");
+            if (!user.empty()) {
+                auto& budget=requestBudgets_[game+'\n'+user];
+                if (timestamp-budget.start>=86400) budget={timestamp,0};
+                if (budget.count>=MaxAccountRequestIds) throw Error("RATE_LIMITED");
+            }
+            try { Statement nonce(store_.db(),"INSERT INTO request_ids(game_id,id,created) VALUES(?,?,?)");nonce.bind(1,game);nonce.bind(2,id);nonce.bind(3,timestamp);(void)nonce.row(); }
+            catch (const Error& e) { if (e.code()=="CONFLICT") throw Error("DUPLICATE_REQUEST");throw; }
+        }
+        store_.exec("COMMIT");
+        if (recorded) {
+            ++requestIdCounts_[game];
+            if (!user.empty()) ++requestBudgets_[game+'\n'+user].count;
+        }
+    } catch (...) { try{store_.exec("ROLLBACK");}catch(...){} throw; }
+    const DurableScope durable(store_,!Ephemeral.contains(op));
     if (op=="auth.login") {
         const auto username=stringField(a,"username",64),password=stringField(a,"password",256);
         if (!identifier(username)||password.size()<8) throw Error("AUTHENTICATION_FAILED");
@@ -77,10 +140,10 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
         }
         // The rate limit and request ID above were decided under the lock; the scrypt derivation,
         // tens of milliseconds by design, runs without it so other players' requests keep flowing.
-        lock.unlock();
+        store_.exec("PRAGMA synchronous=NORMAL");lock.unlock();
         std::string computed;
         try {computed=passwordHash(password,salt);} catch(...) {lock.lock();throw;}
-        lock.lock();
+        lock.lock();store_.exec("PRAGMA synchronous=FULL");
         if (!found || expected.size()!=computed.size() || CRYPTO_memcmp(expected.data(),computed.data(),computed.size())!=0)
             throw Error("AUTHENTICATION_FAILED");
         return issueCredentials(user,game);
