@@ -78,34 +78,42 @@ private:
     std::string peer_;
     bool held_=true;
 };
+// A client may send further requests on the same connection, saving a TLS handshake each: the
+// next one must start within 15 s, and a connection serves at most 1000.
+constexpr int MaxRequestsPerConnection=1000;
+constexpr std::chrono::seconds KeepAliveIdle{15};
 template<class Stream>
 net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Workers& workers,const std::string& peer,ConnectionLease& lease) {
-    beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     beast::flat_buffer buffer;
-    http::request_parser<http::string_body> parser;
-    parser.body_limit(MaxMessageBytes);parser.header_limit(8192);
-    boost::system::error_code ec;
-    co_await http::async_read(stream,buffer,parser,net::redirect_error(net::use_awaitable,ec));
-    if(ec)co_return false;
-    auto request=parser.release();
-    if(request.target()==RelayPath&&beast::websocket::is_upgrade(request)) {
-        if(buffer.size()!=0)co_return false;
-        co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests,[&lease]{lease.release();});co_return true;
+    for(int served=0;;++served) {
+        beast::get_lowest_layer(stream).expires_after(served==0?std::chrono::seconds(10):KeepAliveIdle);
+        http::request_parser<http::string_body> parser;
+        parser.body_limit(MaxMessageBytes);parser.header_limit(8192);
+        boost::system::error_code ec;
+        co_await http::async_read(stream,buffer,parser,net::redirect_error(net::use_awaitable,ec));
+        if(ec)co_return false;
+        auto request=parser.release();
+        if(request.target()==RelayPath&&beast::websocket::is_upgrade(request)) {
+            if(buffer.size()!=0)co_return false;
+            co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests,[&lease]{lease.release();});co_return true;
+        }
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
+        const bool again=request.keep_alive()&&served+1<MaxRequestsPerConnection;
+        http::response<http::string_body> response{http::status::ok,11};
+        response.set(http::field::content_type,"application/json");response.set(http::field::cache_control,"no-store");
+        response.keep_alive(again);
+        if(request.method()!=http::verb::post||request.target()!="/cna/v1") {
+            response.result(http::status::not_found);response.body()=CnaService::response("","NOT_FOUND").dump();
+        } else {
+            // Storage and sign-in derivation block; they run on the worker pools so these network
+            // threads keep accepting, handshaking and forwarding relay datagrams meanwhile.
+            auto& pool=signIn(request.body())?workers.signIns:workers.requests;
+            response.body()=co_await net::co_spawn(pool,[&]()->net::awaitable<std::string>{co_return service.handle(request.body(),peer);},net::use_awaitable);
+        }
+        response.prepare_payload();
+        co_await http::async_write(stream,response,net::redirect_error(net::use_awaitable,ec));
+        if(ec||!again)co_return false;
     }
-    http::response<http::string_body> response{http::status::ok,11};
-    response.set(http::field::content_type,"application/json");response.set(http::field::cache_control,"no-store");
-    response.keep_alive(false);
-    if(request.method()!=http::verb::post||request.target()!="/cna/v1") {
-        response.result(http::status::not_found);response.body()=CnaService::response("","NOT_FOUND").dump();
-    } else {
-        // Storage and sign-in derivation block; they run on the worker pool so these network
-        // threads keep accepting, handshaking and forwarding relay datagrams meanwhile.
-        auto& pool=signIn(request.body())?workers.signIns:workers.requests;
-        response.body()=co_await net::co_spawn(pool,[&]()->net::awaitable<std::string>{co_return service.handle(request.body(),peer);},net::use_awaitable);
-    }
-    response.prepare_payload();
-    co_await http::async_write(stream,response,net::redirect_error(net::use_awaitable,ec));
-    co_return false;
 }
 net::awaitable<void> connection(tcp::socket socket,std::string peer,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,Workers& workers,bool insecure) {
     ConnectionLease lease(admission,peer);
