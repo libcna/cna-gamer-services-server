@@ -72,7 +72,8 @@ bool Service::validateRelayGrantLocked(const RelayGrant& grant,bool redeemed) {
     machine.bind(1,grant.machine);machine.bind(2,grant.owner);machine.bind(3,grant.session);machine.bind(4,grant.game);machine.bind(5,now());machine.bind(6,now());
     if(!machine.row())return false;
     Statement roster(store_.db(),"SELECT COUNT(*) FROM directory_members WHERE machine_id=? AND session_id=? AND game_id=?");
-    roster.bind(1,grant.machine);roster.bind(2,grant.session);roster.bind(3,grant.game);(void)roster.row();if(roster.number(0)!=expected)return false;
+    // A machine may have gained members since (sessions.addMembers); every ticket member must still be one.
+    roster.bind(1,grant.machine);roster.bind(2,grant.session);roster.bind(3,grant.game);(void)roster.row();if(roster.number(0)<expected)return false;
     Statement valid(store_.db(),"SELECT COUNT(*) FROM relay_ticket_members t JOIN refresh_families f ON f.id=t.family_id JOIN users u ON u.id=t.user_id JOIN directory_members m ON m.user_id=t.user_id AND m.machine_id=? AND m.session_id=? AND m.game_id=? WHERE t.ticket_hash=? AND f.user_id=t.user_id AND f.game_id=? AND f.revoked=0 AND f.expires>? AND u.online_allowed=1");
     valid.bind(1,grant.machine);valid.bind(2,grant.session);valid.bind(3,grant.game);valid.bind(4,grant.ticketHash);valid.bind(5,grant.game);valid.bind(6,now());
     (void)valid.row();return valid.number(0)==expected;

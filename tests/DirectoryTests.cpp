@@ -196,6 +196,34 @@ int main() {
             check(call(service,"sessions.leave",{{"session",plain["result"]["session"].get<std::string>()}},tokens[0])["result"]["ended"]==true,"cleanup");
             legacy["allowHostMigration"]="yes";check(call(service,"sessions.create",legacy,tokens[0])["error"]=="INVALID_ARGUMENT","boolean flag");
         }
+        // XNA AddLocalGamer online: a machine's owner adds signed-in local accounts to its own group.
+        {
+            Json created{{"kind","player"},{"maxGamers",4},{"privateSlots",1},{"properties",properties},{"allowJoinInProgress",false},
+                {"participants",Json::array({tokens[0]})}};
+            const auto hosted=call(service,"sessions.create",created,tokens[0])["result"]["session"].get<std::string>();
+            auto joined=call(service,"sessions.join",{{"session",hosted},{"participants",Json::array({tokens[1]})}},tokens[1]);
+            check(joined["error"]=="OK","add-member fixture join");
+            const auto machine=joined["result"]["machine"].get<std::string>();const auto before=joined["result"]["revision"].get<long long>();
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[1],tokens[2]})}},tokens[1])["error"]=="INVALID_ARGUMENT","the owner is already in the group");
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[0]})}},tokens[1])["error"]=="INVALID_STATE","a member of another machine");
+            auto added=call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[2]})}},tokens[1]);
+            check(added["error"]=="OK"&&added["result"]["machine"]==machine&&added["result"]["members"].size()==3&&added["result"]["revision"].get<long long>()==before+1,"added to the owner's machine");
+            const auto& row=added["result"]["members"][2];
+            check(row["gamertag"]=="charlie"&&row["machine"]==machine&&row["ordinal"]==2&&row["privateSlot"]==false,"a public slot and the next ordinal");
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[3]})}},tokens[2])["error"]=="NOT_AUTHORIZED","only the machine's owner adds");
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[3]})}},tokens[1])["error"]=="SESSION_FULL","public slots only");
+            check(call(service,"sessions.relayTicket",{{"session",hosted},{"participants",Json::array({tokens[1],tokens[2]})}},tokens[1])["error"]=="OK","the grown group gets relay authority");
+            check(call(service,"sessions.relayTicket",{{"session",hosted},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="NOT_AUTHORIZED","a ticket names the whole group");
+            Json update{{"session",hosted},{"revision",added["result"]["revision"]},{"maxGamers",8},{"privateSlots",1},{"properties",properties},
+                {"state","playing"},{"allowJoinInProgress",false}};
+            check(call(service,"sessions.update",update,tokens[0])["error"]=="OK","playing without join-in-progress");
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[3]})}},tokens[1])["error"]=="INVALID_STATE","no add during a game that refuses joiners");
+            update["revision"]=update["revision"].get<long long>()+1;update["state"]="lobby";
+            check(call(service,"sessions.update",update,tokens[0])["error"]=="OK","back in the lobby");
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[3],tokens[4]})}},tokens[1])["error"]=="OK","a third and fourth local gamer");
+            check(call(service,"sessions.addMembers",{{"session",hosted},{"participants",Json::array({tokens[0]})}},tokens[1])["error"]=="LIMIT_EXCEEDED","four gamers per machine");
+            check(call(service,"sessions.leave",{{"session",hosted}},tokens[0])["result"]["ended"]==true,"cleanup add-member fixture");
+        }
         for(const auto& bad:{Json(0),Json(5),Json(-1),Json(18446744073709551615ULL),Json(1.5),Json(true)}) {
             auto request=find;request["localCount"]=bad;check(call(service,"sessions.find",request,tokens[1])["error"]=="INVALID_ARGUMENT","bounded search locals");
         }

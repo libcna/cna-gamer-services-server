@@ -5,14 +5,16 @@ import os, pathlib, selectors, shutil, socket, subprocess, sys, tempfile, time
 
 def main():
     flags=sys.argv[2:]
-    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart","--migrate","--crash"},"test arguments"
+    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart","--migrate","--crash","--add"},"test arguments"
     isolated="--isolated" in flags
     invite="--invite" in flags
     restart="--restart" in flags
     # Host migration: the host allows it, then leaves (--migrate) or is killed (--crash).
     migrate="--migrate" in flags
     crash="--crash" in flags
-    variant="invite" if invite else "crash" if crash else "migrate" if migrate else None
+    # AddLocalGamer: the joiner joins with Bob, then adds Dana.
+    add="--add" in flags
+    variant="invite" if invite else "crash" if crash else "migrate" if migrate else "add" if add else None
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
@@ -148,6 +150,7 @@ def main():
                 print(kind,"public XNA NetworkSession: two CNA processes/four Guide-signed-in accounts, pending Begin/End with one owner-thread callback,",
                     "Guide.ShowGameInvite -> Guide acceptance -> InviteAccepted -> synchronous JoinInvited," if invite else "property-filtered Find,",
                     "complete GamerJoined replay, shared machines,",
+                    "Dana added with AddLocalGamer after the join," if add else "",
                     "server restart survived mid-session," if restart else "",
                     "reliable packets incl. 32KiB each way (in-order unreliable best-effort after the restart)," if restart else "six verified packets each way incl. 32KiB and in-order,",
                     "host properties/join-in-progress and StartGame/EndGame observed remotely, per-machine EndGame leaderboard commits read back by both,",

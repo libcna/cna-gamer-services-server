@@ -54,7 +54,7 @@ void Service::pruneDirectory() {
     Statement remove(store_.db(),"DELETE FROM directory_machines WHERE expires<=?");remove.bind(1,now());(void)remove.row();
     transaction.commit();
 }
-std::vector<std::string> Service::directoryParticipants(const std::string& user,const std::string& game,const Json& args) {
+std::vector<std::string> Service::directoryParticipants(const std::string& user,const std::string& game,const Json& args,bool includesActor) {
     if(!args.contains("participants")||!args["participants"].is_array()||args["participants"].empty()||args["participants"].size()>4)throw Error("INVALID_ARGUMENT");
     std::vector<std::string> participants;std::set<std::string> seen;
     for(const auto& credential:args["participants"]) {
@@ -65,7 +65,7 @@ std::vector<std::string> Service::directoryParticipants(const std::string& user,
         if(!seen.insert(person.text(0)).second)throw Error("INVALID_ARGUMENT");
         participants.push_back(person.text(0));
     }
-    if(!seen.contains(user))throw Error("NOT_AUTHORIZED");
+    if(seen.contains(user)!=includesActor)throw Error(includesActor?"NOT_AUTHORIZED":"INVALID_ARGUMENT");
     return participants;
 }
 Json Service::directorySnapshot(const std::string& id,bool includeMembers) {
@@ -94,7 +94,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         {"sessions.find",{"kind","localCount","properties","start","limit"}},
         {"sessions.join",{"session","participants"}},{"sessions.joinInvited",{"session","invite","participants"}},
         {"sessions.get",{"session"}},{"sessions.touch",{"session"}},{"sessions.leave",{"session"}},
-        {"sessions.remove",{"session","machine"}},
+        {"sessions.remove",{"session","machine"}},{"sessions.addMembers",{"session","participants"}},
         {"sessions.update",{"session","revision","maxGamers","privateSlots","properties","state","allowJoinInProgress","allowHostMigration"}}};
     // Fields a client that predates them leaves out (capability host-migration).
     static const std::set<std::string> optional{"allowHostMigration"};
@@ -214,6 +214,29 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         Statement remove(store_.db(),ended?"DELETE FROM directory_sessions WHERE id=?":"DELETE FROM directory_machines WHERE id=?");remove.bind(1,ended?id:machine);(void)remove.row();
         if(!ended&&!hosting){Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();}
         transaction.commit();return Json{{"ended",ended}};
+    }
+    if(op=="sessions.addMembers") {
+        // XNA NetworkSession.AddLocalGamer: the machine's owner adds signed-in local accounts to its
+        // group, in public slots and only when the session admits joiners, as a join would.
+        if(owner.text(0)!=user)throw Error("NOT_AUTHORIZED");
+        const auto added=directoryParticipants(user,game,args,false);
+        Statement group(store_.db(),"SELECT COUNT(*) FROM directory_members WHERE machine_id=?");group.bind(1,machine);(void)group.row();
+        if(group.number(0)+static_cast<long long>(added.size())>4)throw Error("LIMIT_EXCEEDED");
+        if(session.text(2)=="playing"&&(session.text(7)=="ranked"||!session.number(3)))throw Error("INVALID_STATE");
+        const auto snapshot=directorySnapshot(id,true);
+        if(added.size()>snapshot["openPublicSlots"].get<std::size_t>())throw Error("SESSION_FULL");
+        for(const auto& member:added) {
+            Statement occupied(store_.db(),"SELECT 1 FROM directory_members WHERE game_id=? AND user_id=?");occupied.bind(1,game);occupied.bind(2,member);
+            if(occupied.row())throw Error("INVALID_STATE");
+        }
+        std::set<long long> ordinals;for(const auto& row:snapshot["members"])ordinals.insert(row["ordinal"].get<long long>());
+        for(const auto& member:added) {
+            long long ordinal=0;while(ordinals.contains(ordinal))++ordinal;ordinals.insert(ordinal);
+            Statement join(store_.db(),"INSERT INTO directory_members(session_id,game_id,user_id,machine_id,private_slot,ordinal) VALUES(?,?,?,?,0,?)");
+            join.bind(1,id);join.bind(2,game);join.bind(3,member);join.bind(4,machine);join.bind(5,ordinal);(void)join.row();
+        }
+        Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();
+        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
     }
     if(op=="sessions.remove") {
         // XNA NetworkMachine.RemoveFromSession: the host removes another machine and all its users.

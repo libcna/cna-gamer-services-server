@@ -149,3 +149,6 @@ add_test(NAME service_cna_session_migration COMMAND ${Python3_EXECUTABLE} ${CMAK
 set_tests_properties(service_cna_session_migration PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 add_test(NAME service_cna_session_host_crash COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --crash --isolated)
 set_tests_properties(service_cna_session_host_crash PROPERTIES TIMEOUT 240 SKIP_RETURN_CODE 77)
+# GSP-K2: XNA AddLocalGamer online -- the joiner adds its second gamer after joining.
+add_test(NAME service_cna_session_add_gamer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --add --isolated)
+set_tests_properties(service_cna_session_add_gamer PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)

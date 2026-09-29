@@ -39,7 +39,7 @@ private:
     void revokeFamily(const std::string& family);
     Json directory(const std::string& user,const std::string& game,const std::string& op,const Json& args);
     Json directorySnapshot(const std::string& id,bool includeMembers);
-    std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args);
+    std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args,bool includesActor=true);
     void pruneDirectory();
     bool migrateDirectoryHost(const std::string& session,const std::string& departing);
     Json invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args);
