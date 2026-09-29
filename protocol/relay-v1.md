@@ -1,9 +1,10 @@
 # CNA realtime relay protocol v1
 
 This CNA-owned protocol/accounts/assets are not Xbox LIVE compatible. This document defines
-bounded framing, ticket/grant authority and the GS-008b authenticated WSS endpoint. Verified-WSS
-forwarding/security tests pass for both directory categories and isolated titles/sessions. CNA ENet/public online-session integration and isolated
-Internet connectivity acceptance are subsequent work; this endpoint alone does not prove them.
+bounded framing, ticket/grant authority and the authenticated WSS endpoint that carries every CNA
+online NetworkSession's ENet datagrams. It is tested with real CNA processes for both directory
+categories, isolated titles/sessions, separate outbound-NAT namespaces, server restart, host
+migration and host crash on one Linux host; public Internet latency and failover are not measured.
 Canonical codec: `protocol/include/CnaService/RelayProtocol.hpp`, `src/RelayProtocol.cpp`;
 golden corpus `protocol/golden/relay-v1.json`. CNA copies these artifacts exactly and tests drift.
 
@@ -125,7 +126,8 @@ transactional; schema 7 and earlier preserve accounts/catalog/data, newer schema
 
 Transport implements TLS-only ticket messages, bounded handshake, one channel per machine,
 periodic revocation checks, queue/rate limits and source-authorized forwarding as specified above.
-Neither ticket issuance nor standalone WSS forwarding proves CNA ENet Internet multiplayer.
+When a machine's relay connection closes, its directory lease is cut to 20 seconds; reconnecting
+with a fresh ticket restores it, so a crashed machine leaves its session in about 20 seconds.
 
 ## Measured connectivity boundary (GS-008d1)
 
@@ -137,9 +139,8 @@ The native corpus exercises separate rootless Linux network namespaces with inde
 NAT helpers, identical private addresses and no inbound mappings, for both categories/titles and
 multi-local identities. Reliable 32KiB application fragmentation and an unreliable channel pass.
 This is shared-host NAT-isolation evidence, not public Internet deployment/latency/failover proof.
-Public XNA online lifecycle, reconnect/resume and eventual direct/P2P optimization remain separate
-implementation/acceptance work. Test prerequisite absence is an explicit skip, not a passing NAT
-result. See README for reproduction and test-helper licensing.
+Every datagram goes through the relay: there is no direct/P2P path. Test prerequisite absence is an
+explicit skip, not a passing NAT result. See README for reproduction and test-helper licensing.
 
 ## Client game admission boundary (GS-008c3c1)
 
@@ -154,7 +155,7 @@ service authority. Host leave broadcasts may name only complete admitted remote 
 unknown/partial leave or end claims cannot replace authority reconciliation. These client rules do not change CNR v1/golden envelope bytes, impose XNA objects
 on the server or provide malicious-host anti-cheat. Native tests now refuse a forged existing
 sender ID and unknown target while preserving actual fragmented/unreliable ENet exchange in
-both localhost and separate outbound-NAT namespaces. Public XNA lifecycle remains unfinished.
+both localhost and separate outbound-NAT namespaces.
 
 ## Owned native session engine (GS-008c3c2)
 
@@ -168,4 +169,6 @@ an opaque datagram forwarder. CNA bounds pending observations and unacknowledged
 by 128 messages/4MiB, with a separate 64-message/256KiB control budget and a 64-ENet-event pump
 budget. These local implementation limits do not change CNR v1 envelope/golden bytes. New native
 and NAT acceptance cases exercise the owned engine, separately from hostile raw packet probes.
-Public XNA lifecycle and reconnect remain incomplete.
+The standard XNA NetworkSession sits on this engine: create/find/join, invitations, host migration,
+AddLocalGamer and reconnection across a service restart are covered by the `service_cna_session*`
+tests.

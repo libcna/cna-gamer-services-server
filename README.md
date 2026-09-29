@@ -1,382 +1,226 @@
 # cna-gamer-services-server
 
-Independent C++23 CNA service inspired by historical XNA functionality. **Not Xbox LIVE compatible** (protocol, accounts, assets, wire or binary). Partial implementation: persistent accounts/title-scoped revocable authentication, profiles,
-mutual friend requests and presence, achievements, immutable pictures/assets and paged leaderboard
-reads, authenticated local gameplay commits, rotating refresh credentials and heartbeat.
-The control-only PlayerMatch/Ranked session directory now supports authenticated multi-local
-membership, sparse property filtering, host revisions/leases and restart. Standard CNA online
-BeginFind/EndFind now has real-server coverage for both categories, title isolation and restart;
-public online create/join sessions,
-public online lifecycle integration, platform keychains, push events and
-avatar distribution remain unfinished. Private CNA ENet relay transport is now tested with real
-separate processes and independently NATed rootless namespaces; public online lifecycle and
-public Internet deployment acceptance are the next tasks. The separate server WSS endpoint now forwards authenticated
-bounded datagrams; that alone does not prove Internet multiplayer. Do not call this complete or production-hardened.
+An independent C++23 service for CNA, the C++ reimplementation of the XNA 4.0 programming model.
+It provides what XNA games reached through their online service: accounts and Guide sign-in, gamer
+profiles and pictures, friends and presence, achievements, leaderboards with Ranked arbitration,
+messages and player reviews, avatars, the online session directory with invitations and host
+migration, and the relay that carries online NetworkSession traffic.
 
-Dependencies: OpenSSL >=3 (Apache-2.0), Boost >=1.74 (BSL-1.0), SQLite (public domain), nlohmann/json >=3.11 (MIT), all system dependencies. Original service code is MIT. Linux is the tested host; Windows/macOS TLS client/server builds still need validation.
+**It is not Xbox LIVE compatible.** Protocol, accounts, assets and binaries are CNA's own; no Xbox
+LIVE wire format, service binary or proprietary asset is used or reproduced. Original code is MIT
+([LICENCE](LICENCE)); dependencies keep their own licenses ([THIRD_PARTY.md](THIRD_PARTY.md)).
 
-```sh
-CCACHE_DIR=/rv/cnaccache CCACHE_BASEDIR=/rv cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-CCACHE_DIR=/rv/cnaccache CCACHE_BASEDIR=/rv cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-build/cna-gamer-services-admin development.sqlite3 title sample 'Sample title'
-# Password comes from stdin, never command arguments. Use a secret input source with shell tracing off.
-build/cna-gamer-services-admin development.sqlite3 user alice Alice
-# Provide catalog JSON on stdin:
-build/cna-gamer-services-admin development.sqlite3 achievement sample < achievement.json
-build/cna-gamer-services-server --database development.sqlite3 --listen 127.0.0.1 --port 47831 --cert certificate.pem --key private-key.pem
-# Explicit unencrypted loopback testing only:
-build/cna-gamer-services-server --database development.sqlite3 --insecure-loopback
-```
+Specifications: [control protocol v1](protocol/v1.md) (every operation, argument, limit and error)
+and [relay protocol v1](protocol/relay-v1.md). CNA vendors their headers, parser and golden vectors
+and checks them for drift (`tools/net/check_service_protocol.py` in CNA).
 
-`inspect` prints user/title/session/earned counts only. `revoke-user <username>` revokes sessions. `reset-earned <title>` resets test achievement data. SQLite migrates transactionally on first open, keeps data on restart and refuses unknown schema versions. Back up the SQLite database using SQLite backup tooling before changing schema; never delete owner data to resolve version errors. Restrict DB/key files and run as an unprivileged service user. TLS tests use generated test CA/cert, never disabled certificate verification. No password/token request logging. See [canonical protocol](protocol/v1.md) for limits and exact operations and CNA's living implementation plan for unfinished acceptance items.
+## What it provides
 
-Original asset provisioning (trusted administrator paths only):
-```
-build/cna-gamer-services-admin service.sqlite3 asset my-title image/png original-picture.png
-# prints content hash; include it as picture in achievement JSON
-build/cna-gamer-services-admin service.sqlite3 picture alice <hash>
-```
-SQLite schema 2 adds immutable assets/title associations and user pictures; schema 1 upgrades
-transactionally at open. Assets are PNG (<=512x512/512 KiB) or GLB v2 (<=16 MiB), header checked.
-Complete decode/asset-catalog validation remains future work. Network callers only supply hashes
-and bounded offsets, never filesystem paths. See protocol/v1.md for ACL/chunk limits.
+The `hello` operation advertises these capabilities; CNA refuses to use a feature whose capability
+is missing.
 
-Cross-repository integration: set `CNA_SERVICE_CLIENT_HARNESS` to the built CNA client harness
-and run CTest. The test then includes two real CNA processes, standard Guide sign-in and social
-flows, rich presence, revocation, immutable picture streams/cache and server restart persistence.
-Without it, the TLS test still uses separate Python clients. Both are service/control tests, not
-Internet realtime multiplayer/relay evidence.
+| Capability | What it covers |
+|---|---|
+| `identity`, `authentication`, `session-refresh`, `heartbeat` | Title-scoped sign-in (scrypt verifiers), one-hour access tokens, rotating 30-day refresh families with replay revocation, `auth.ping` |
+| `friends`, `friend-requests`, `presence`, `presence-status` | Mutual friend requests, per-title rich presence, online/away/busy, joinable and invitation flags |
+| `game-defaults`, `gamer-zone` | Account-wide XNA `GameDefaults`; gamer zone; reputation from player reviews |
+| `achievements`, `assets` | Title achievement catalogs with pictures; immutable hash-addressed PNG/GLB assets read in chunks |
+| `leaderboard-reads`, `local-leaderboard-commit`, `leaderboard-epoch-abort`, `ranked-arbitration` | Paged, centered and restricted reads; commits at XNA gameplay boundaries; Ranked rounds reconciled from every machine's report |
+| `messages`, `player-reviews` | Guide messages and the player review pane |
+| `avatars` | One validated avatar description per account; catalogs served by hash so clients fetch only missing items |
+| `session-directory`, `session-removal`, `host-migration`, `session-add-members`, `session-invitations` | PlayerMatch and Ranked directory, `RemoveFromSession`, host migration, `AddLocalGamer`, persistent invitations |
+| `relay-tickets`, `relay` | One-use tickets and the WSS relay for ENet datagrams |
 
+Not provided: Xbox LIVE compatibility of any kind; account self-registration or password change
+over the wire (the administrator provisions accounts); server push (clients poll friends, inboxes
+and the directory); privacy and block settings; TrueSkill; time windows for the `...Recent`
+leaderboard keys; direct peer-to-peer connections (every online datagram goes through the relay);
+Marketplace, PartnerToken, title updates, parties and voice. Linux is the tested server host;
+Windows and macOS builds are unvalidated.
 
-Leaderboard catalog/read development (schema 3):
+## Build and run
+
+Dependencies: OpenSSL >=3, Boost >=1.74 (headers, Beast), SQLite >=3.38, nlohmann/json >=3.11,
+all from the system.
 
 ```sh
-printf '%s' '{"key":"BestScoreLifeTime","mode":0,"ascending":false,"aggregation":"best","arbitrated":false,"columns":{"Rounds":"int32"}}' | build/cna-gamer-services-admin service.sqlite3 leaderboard my-title
-printf '%s' '{"key":"BestScoreLifeTime","mode":0,"gamertag":"Alice","rating":123,"columns":{"Rounds":{"type":"int32","value":3}}}' | build/cna-gamer-services-admin service.sqlite3 seed-leaderboard my-title
+cmake -S . -B build -G Ninja && cmake --build build --parallel
+build/cna-gamer-services-server --database service.sqlite3 --listen 0.0.0.0 --port 47831 \
+    --cert certificate.pem --key private-key.pem
+# Development only, plain HTTP on a numeric loopback address:
+build/cna-gamer-services-server --database service.sqlite3 --insecure-loopback
 ```
 
-These administration seeds are fixtures. Online clients read persisted paged, centered or restricted
-boards; gameplay setters are transient and authorized local commits flush at EndGame or explicit early leave. No Ranked,
-TrueSkill or Ranked arbitration capability is claimed yet. Schema 4 adds authenticated local game
-epochs and atomic/idempotent EndGame/early-leave commits; authenticated abort releases interrupted
-epochs. Offline crash cleanup is best effort and expires by the documented quota/lifetime.
-SQLite >=3.38 supplies JSON table filtering.
+CNA finds the service through `CNA_GAMER_SERVICES_ENDPOINT` (for example
+`https://games.example.org:47831/cna/v1`), `CNA_GAME_ID` (a title ID registered below) and, for a
+private CA, `CNA_GAMER_SERVICES_CA_BUNDLE`; see CNA's `docs/gamer-services-server.md`.
 
-Original server source, protocol and tests use the [MIT license](LICENCE). See
-[dependency notices](THIRD_PARTY.md) for the independently licensed transport/database/JSON libraries.
+## Administration
 
+`build/cna-gamer-services-admin <database> <command> ...` works on the same database as a running
+server and never prints a credential. Passwords and JSON documents come from stdin.
 
-Schema 5 adds hashed rotating access/refresh families (30-day absolute refresh lifetime, one-hour
-access tokens), replay-family revocation and authenticated heartbeat. Normal logout revokes its
-refresh family; `revoke-user` covers all user families and legacy access. Development
-`build/cna-gamer-services-admin service.sqlite3 expire-access alice` expires Alice's access tokens
-while preserving refresh authority, for maintenance/reconnect tests. CNA now consumes refresh, pumps heartbeat, and can resume four local slots from private POSIX
-user storage. Other client platforms retain ephemeral credentials pending a secure provider. The
-server does not supply the endpoint before clients connect. Lost
-rotation responses can require fresh Guide sign-in. No credential logging or plaintext bearer
-persistence on the server. See the canonical protocol for caps, migration and security semantics.
+| Command | Effect |
+|---|---|
+| `title <id> <name>` | Registers a title; clients name it in every request |
+| `user <username> <gamertag>` | Creates an account; password on stdin (use a secret input, shell tracing off) |
+| `achievement <title>` | Adds an achievement from JSON on stdin (`key`, `name`, `description`, `howToEarn`, `score`, optional `picture` hash) |
+| `leaderboard <title>` / `seed-leaderboard <title>` | Defines a board / inserts a fixture row, JSON on stdin |
+| `asset <title> <mime> <file>` | Imports a PNG (<=512x512, <=512 KiB) or GLB (<=16 MiB); prints its hash |
+| `picture <username> <hash>` | Sets a gamer picture |
+| `avatar-catalog <directory>` | Imports and fully validates a CNA avatar catalog (`assets/avatars/v1`, `v2`) |
+| `avatar <username> random [male\|female]`, `clear` or `set` | Gives an account an avatar (`set` reads the description hex from stdin) |
+| `game-defaults <username>` | Sets the account's XNA GameDefaults, JSON on stdin |
+| `inspect` / `inspect-online <title>` | Counts only: users, titles, sessions, earned; directory, invitations, relay records |
+| `revoke-user <username>` | Revokes every credential of an account |
+| `expire-access <username>` | Expires access tokens but keeps refresh authority (maintenance tests) |
+| `reset-earned <title>` / `reset-online <title>` | Clears a title's earned achievements / its directory sessions, memberships and invitations (accounts, scores and abuse counters stay) |
 
+## Operating it
 
-Schema 6 adds a persistent bounded session directory. Directory membership is control state;
-it grants neither ENet connectivity nor Ranked arbitration. Host/member leases are 90 seconds,
-renewed separately from account heartbeat. Expired host closes its directory; migration is pending.
-See the session-directory protocol section for exact request fields, limits and failures. CTest
-includes 99 dedicated assertions and two independent TLS directory clients with four user accounts
-for PlayerMatch and Ranked, including server restart/property filtering/leave. This is not proof of
-Internet multiplayer; CNA XNA frontend and relay remain active implementation tasks.
+**Files.** One SQLite database in WAL mode (`service.sqlite3`, `-wal`, `-shm`) plus the TLS key.
+Restrict both to the unprivileged service user. Back up with SQLite's online backup
+(`sqlite3 service.sqlite3 ".backup backup.sqlite3"`), never by copying the file while it runs.
+Opening a database migrates it transactionally to the current schema (18); a newer schema is
+refused and nothing is deleted to resolve it. Back up before upgrading the server.
 
+**TLS.** TLS 1.2 or newer with the given chain and key; clients verify chain and hostname. A new
+certificate needs a restart. Clients reconnect by themselves, and live online sessions resume their
+relay connections (tested by `service_cna_session_restart`).
 
-Schema 7 adds authenticated persistent invitations, explicit accept/dismiss and invited multi-local
-private-slot joins. The capability is control-only, with recipient/title binding, strict limits and
-independent persistent abuse counters. CTest includes invitation authorization, atomicity, expiry,
-replay, restart and close/recreate quota checks; TLS workers exercise receipt across server restart
-and private/public allocation for both directory kinds. Public CNA Guide/InviteAccepted integration,
-relay and console Ranked behavioral verification remain unfinished. Migration runs transactionally
-on opening a schema-6-or-earlier database; back up the SQLite database before upgrading deployments.
+**Durability.** Commits use `synchronous=NORMAL`: crash-safe, but a power loss may roll back the
+last moments of leases, presence and request bookkeeping. Everything a player would notice losing
+(credentials and revocations, awards, scores, friends, messages, profile and avatar edits) commits
+with `synchronous=FULL`.
 
-Administration for isolated development state (no credentials printed):
+**Limits.** 256 control connections, at most 32 from one address; 1024 authenticated relay
+machines, counted apart. A connection carries up to 1000 requests, idling at most 15 s between
+them. Sign-in and refresh: 10 per minute per address. Messages up to 64 KiB. Request IDs that
+guard mutations against replay: 1,000,000 per title and 20,000 per account per day (reads,
+heartbeats, lease and presence updates record none). Past 32 live sign-ins an account's oldest
+refresh family is signed out. The server raises its descriptor limit to what the host allows
+(up to 65536) and keeps serving when descriptors run out.
 
-```sh
-build/cna-gamer-services-admin service.sqlite3 inspect-online your-title
-build/cna-gamer-services-admin service.sqlite3 reset-online your-title
+**Monitoring.** One line a minute on stdout, never with a credential, address or request body:
+
+```
+stats AUTHENTICATION_FAILED=1 OK=5412 RATE_LIMITED=3 refused=0 control=41 relays=12
 ```
 
-`inspect-online` reports JSON counts for directory sessions, members, retained invitations and
-sender counters and relay ticket/grant records. `reset-online` removes that title's sessions/membership/invitations through FK
-cascade; accounts, achievements, leaderboard data and independent invite abuse counters remain.
-Neither operation is remotely exposed by the control service.
+It gives response counts per error code since the previous line, connections refused by admission,
+open control connections and attached relay machines. `INTERNAL_ERROR` means storage failed (disk
+full, a locked database); the response to the client never carries details. SIGINT and SIGTERM
+stop the server.
 
-GS-007c validation checkpoint (2026-09-28): GCC14 clean build with `-Werror`, two compile jobs;
-CTest **4/4 passed in 65.71s**: service unit 5,216 assertions, directory 99 assertions, invitations
-153 assertions, verified-TLS multi-process/restart suite. The TLS suite runs separate service
-clients, both online directory types and recipient-confirmed private-slot joins, and administration
-reset checks. This proves service control/membership behavior, not public XNA online sessions
-or Internet realtime connectivity. The CNA protocol copy/drift gate is synchronized independently.
+**One process.** The service is one process with one SQLite writer and an in-memory relay hub. It
+does not scale across machines. Put a firewall or proxy in front of it against floods from many
+addresses.
 
-GS-007d real CNA control probe: set `CNA_SERVICE_DIRECTORY_CLIENT_HARNESS` to CNA's
-`cmake-build-debug/cna_service_directory_client_harness`; `service_cna_directory` explicitly skips
-with return 77 when absent. It runs two independent CNA processes with standard Guide sign-in and
-four separate accounts, both directory categories/two titles, real server restart and recipient
-confirmation, property filtering, ordinary/invited private membership, retries/departure, deliberately
-expired owner and secondary access credentials, secondary-only revocation at Dispatcher.Update,
-and the existing multi-local leaderboard scope refresh path. Directory operations use CNA's
-private typed backend; this is not a standard-API online NetworkSession acceptance game.
+## Capacity
 
-Full measured integration gate (2026-09-28): `CNA_SERVICE_CLIENT_HARNESS=<CNA C++ probe>
-CNA_SERVICE_C_API_HARNESS=<pure C probe> CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=<directory probe>
-ctest --test-dir build --output-on-failure`: **5/5 passed in 75.37s**. Unit 5,216 assertions;
-directory 99; invitation 153; general TLS E2E 59.24s; two-CNA control E2E 6.85s
-(31 join/16 host checks per directory category). No server production code changed in this step.
-
-GS-008a1 adds the canonical independent binary realtime envelope, specification and golden vectors:
-[relay protocol](protocol/relay-v1.md). Bounded zero-copy parsing covers ENet's 4,096-byte maximum
-MTU and rejects unknown version/type/reserved bytes, empty/oversize payloads and invalid machines.
-Server relay protocol test passes **10,027 assertions**, including 10,000 deterministic mutations.
-Service/directory/invitation/relay unit gate **4/4 passed in 7.52s**, clean `-Werror` build.
-CNA independently runs the same golden corpus and a mutation suite and checks exact source drift.
-This slice does not implement a WebSocket endpoint, authentication tickets or forwarding, does not
-advertise relay capability and does not prove Internet multiplayer. Those are immediate next tasks.
-
-GS-008a2 schema 8 adds SHA-256-only one-use 60s relay ticket records and server-owned connection
-grants for the exact title/session/machine/local group. All local users must supply live credentials;
-only the machine owner may request authority. Grants bind revocable refresh families so normal
-access-token rotation is safe, and revalidation rejects family expiry/revocation, privilege loss,
-leave/host expiry and grant expiry. Prepared queries/transactional consumption, release and
-per-machine/title caps are covered by **60 authority assertions**. Back up before schema upgrade.
-
-Full integration with configured native C++/C/directory CNA probes: **7/7 CTest passed in 74.10s**:
-5,217 service assertions; 99 directory; 153 invitations; 10,027 relay framing; 60 authority;
-general TLS 57.18s; two-CNA control/ticket issuance 6.53s (32 join/17 host checks per kind).
-Clean `-Werror` build, no skipped test. Capability `relay-tickets` means issuance only; WSS forwarding
-and Internet realtime connectivity are still pending and `relay` is not advertised. See
-[relay authority contract](protocol/relay-v1.md).
-
-GS-008b server relay uses a separate verified-WSS `/cna/relay/v1` endpoint, encrypted one-use
-credential hello, exact local-group authority, server-injected source IDs and title/session-only
-routing. Per-socket strands serialize reads/writes; queue reservations precede executor posting,
-including in-flight writes. Authentication/idle/grant/rate/resource limits and safe close semantics
-are in [the canonical relay specification](protocol/relay-v1.md). Only explicit numeric-loopback
-development may use plain WS. Capability `relay` identifies this server endpoint; CNA's private
-WSS/ENet bridge and public online NetworkSession integration remain unfinished.
-
-Independent WSS test client requires Python `websockets==15.0.1` (BSD-3-Clause, tests only);
-`tests/requirements.txt` pins it. The runtime server does not use Python. Test configuration:
+`tests/service_benchmark.py` provisions a scratch title, starts the server and drives it from one
+process per player, each from its own loopback address. Scenarios: `steady` (ordinary
+authenticated mix, no think time), `logins` (the same plus eight clients signing in continuously),
+`idle` (one address holding 160 idle connections), `replay` (the title's request-ID table filled to
+200,000) and `descriptors` (a server limited to 48 descriptors facing 80 idle connections).
 
 ```sh
-ctest --test-dir build -R '^service_relay_(protocol|authorization|flow|wss)$' --output-on-failure
+cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-probe
+python3 tests/service_benchmark.py build-probe --keep-alive --replay-fill 200000 --json result.json
 ```
 
-Tests include bounded/concurrent queue producers, rate windows, exact hello/golden validation,
-verified CA/hostname refusal, UTF-8/version/type/size errors, two multi-local machine groups in both
-session categories/titles, bidirectional binary forwarding, maximum fragmented datagrams, foreign
-session/title isolation, one-use/duplicate registration, repeated reconnect, slow-recipient queue
-overflow, directory lease loss and secondary-account revocation. They do not yet run CNA ENet
-under isolated routing/NAT or unblock a standard-API online XNA sample. The matching-build validation checkpoint below records results; prior GS-008a counts are history.
+Release build, 64 players, 15 s windows, a 16-core Linux machine shared with other work, loopback,
+2026-09-29. "Before" is the server at `a1b2a51`, "after" includes the audit fixes below:
 
-GS-008b matching-build checkpoint (2026-09-28): clean GCC14 `-Werror` incremental build;
-configured native C++/C/directory CNA probes and CTest **9/9 passed in 120.48s**, no skipped tests.
-Service 5,217 assertions; directory 99; invitation 153; relay framing 10,027; authority 60;
-flow/queue/rate/hello/routing 725. General TLS/restart/CNA probe suite 56.96s; two-CNA control
-probe 6.47s (32 join/17 host checks per category); WSS 259 checks/47.36s. No CNA ENet or
-Internet multiplayer proof in this checkpoint. Logs: `build/relay-wss-build.log` and
-`build/relay-wss-final-matching.log`. The exact-limit empty continuation buffer fix and the
-slow-consumer fixture deadline correction are retained by meaningful wire tests.
+| Scenario | Before | After |
+|---|---|---|
+| steady | 73 req/s, p50 703 ms, p99 3.6 s | 1,602 req/s, p50 38 ms, p99 67 ms |
+| sign-in storm | 42 req/s; everything p50 1.47 s | 1,193 req/s; ordinary p50 49 ms; sign-in p50 373 ms, about 11/s |
+| one address, 160 idle connections | 60 of 64 players could not sign in | no failures, 1,440 req/s |
+| full request-ID table | 188 req/s at 90,000 IDs (with the fsync fix already in) | 1,964 req/s at 200,000 IDs |
+| descriptors exhausted | server exited | keeps serving |
 
-GS-008c2 native CNA relay checkpoint (2026-09-28): the private CNA libcurl WSS/loopback UDP bridge
-passes verified trust/hostname refusal, exact authorized machine routing, stable UDP routes,
-wrong-source/oversize local datagram guards, multi-local secondary revocation and server failure.
-Two real CNA processes/four accounts exchange four application messages in each direction through
-actual ENet for both service categories/title IDs, including 32KiB reliable fragmentation and an
-unreliable channel. This probe uses private directory/transport infrastructure and is not yet a
-standard public NetworkSession acceptance sample or evidence of Internet/NAT connectivity.
+These are closed-loop saturation figures. A player idling in a menu costs about two requests a
+minute (the heartbeat), so the real ceiling depends on what games do between heartbeats. Password
+sign-in is expensive by design; returning players renew with refresh tokens, which cost no
+derivation.
+
+## Production audit (2026-09-29)
+
+| Finding | Status |
+|---|---|
+| Every request ran on one of two network threads under one global lock, and sign-in held that lock through its scrypt derivation: one sign-in stalled every request, TLS handshake and relay datagram | Fixed `171b8cf`: worker pools; derivation outside the lock |
+| An accept error (`EMFILE`) ended the whole server | Fixed `171b8cf` |
+| Two or three fsynced commits per request (5.4 ms each on the reference disk) capped the server near 73 req/s | Fixed `5b71f19`: durability classes, one bookkeeping transaction |
+| The 30 s heartbeat spent a title's 100,000 daily request IDs after about 35 always-on players; one account could lock a title for a day; the ID count scanned the whole table on every request | Fixed `5b71f19`: IDs only for mutations, per-account budget, cached count |
+| A sign-in burst queued ordinary requests behind scrypt | Fixed `512e0b9`: separate sign-in pool |
+| 128 connections shared by HTTP and relays: one host with idle connections locked everyone out, and the server relayed at most 96 machines | Fixed `fb43d9a`: per-address admission, relays counted apart, 1024 relays |
+| A TCP and TLS handshake per request | Fixed `dcca1b4` (server) and CNA's reused curl handle |
+| A 33rd sign-in within 30 days was refused, locking out players on clients without credential storage | Fixed `541679c`: the oldest family is signed out |
+| No operational output at all | Fixed `cb1d6e4`: per-minute statistics line |
+| One process, one SQLite writer, in-memory relay hub: no horizontal scaling | Retained |
+| Floods from many addresses can still fill the 256 control connections; no handshake rate limit | Retained: needs a firewall or proxy in front |
+| The per-account request budget lives in memory and starts over when the server restarts | Retained |
+| A new TLS certificate needs a restart (clients and relays reconnect) | Retained |
+| Clients poll; there is no push | Retained |
+
+## Tests
+
+`ctest --test-dir build --output-on-failure` runs the unit suites (service, directory,
+invitations, arbitration, avatars, social, relay protocol/authority/flow), the TLS end-to-end test
+with separate Python clients and restart persistence, the WSS relay test (Python `websockets`,
+pinned in `tests/requirements.txt`) and the benchmark smoke pass.
+
+The tests that drive real CNA processes need CNA's harnesses from a CNA build; each one skips
+(exit 77, never a pass) when its harness is not configured:
 
 ```sh
-CNA_SERVICE_CLIENT_HARNESS=/absolute/CNA/build/cna_service_client_harness \
-CNA_SERVICE_C_API_HARNESS=/absolute/CNA/build/cna_c_api_service_client \
-CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=/absolute/CNA/build/cna_service_directory_client_harness \
-CNA_SERVICE_RELAY_CLIENT_HARNESS=/absolute/CNA/build/cna_service_relay_client_harness \
+CNA=/absolute/path/to/CNA; B=$CNA/cmake-build-debug
+CNA_SERVICE_CLIENT_HARNESS=$B/cna_service_client_harness \
+CNA_SERVICE_C_API_HARNESS=$B/cna_c_api_service_client \
+CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=$B/cna_service_directory_client_harness \
+CNA_SERVICE_RELAY_CLIENT_HARNESS=$B/cna_service_relay_client_harness \
+CNA_SERVICE_SESSION_CLIENT_HARNESS=$B/cna_service_session_client_harness \
+CNA_SERVICE_AVATAR_CLIENT_HARNESS=$B/cna_service_avatar_client_harness \
+CNA_AVATAR_CATALOGS=$CNA/modules/gamer-services/assets/avatars \
 ctest --test-dir build --output-on-failure
 ```
 
-The matching four-probe full gate passes **10/10**, no skip, **133.34s**; new `service_cna_relay`
-passes in **8.26s**, standalone adversarial WSS in **48.10s**. New native test explicitly skips
-(return 77) without its configured probe, so an unconfigured run is not equivalent evidence.
-The fixture owns temporary TLS/SQLite state and closes/kills its child processes on error.
-No server business logic, schema/protocol version, accounts compatibility or license changes in
-this integration slice. Reconnect, isolated relay-only routing, public online sessions/invites,
-Ranked arbitration and standard avatar migration remain active tasks.
+They cover Guide sign-in, social flows, pictures and rich presence through the standard XNA API
+(`service_tls_e2e`); the directory and public `BeginFind` (`service_cna_directory`); raw and owned
+ENet over the relay (`service_cna_relay`, `service_cna_owned_enet`); the public NetworkSession
+lifecycle for PlayerMatch and Ranked (`service_cna_session`), invitations (`service_cna_invite`),
+service restart mid-session (`service_cna_session_restart`), host migration and host crash
+(`service_cna_session_migration`, `service_cna_session_host_crash`), `AddLocalGamer`
+(`service_cna_session_add_gamer`) and avatars with on-demand catalog items (`service_cna_avatars`).
 
-GS-008d1 NAT isolation checkpoint (2026-09-28): the same real CNA/ENet probe now runs in two
-separate unprivileged user/network namespaces for each category/title. Independent slirp4netns
-helpers provide outbound NAT only, with no API socket or inbound port mappings. Namespace inodes
-must differ from the host and each other; each client verifies only loopback plus private
-10.0.2.100 and a tap0 default route through 10.0.2.2. HTTPS/WSS reaches the host-side service through
-that gateway with a matching test-certificate IP SAN. The two identical private addresses cannot
-identify/reach each other's ENet listener; game datagrams travel via authenticated TLS relay.
-This is relay-only NAT-isolation evidence on one Linux host, not a measured public Internet
-production deployment. No host routes, firewall, sysctl, desktop or installed package are changed.
-
-Optional test-only prerequisites: Linux enabled unprivileged user/network namespaces, `unshare`,
-`ip`, and the externally executed slirp4netns helper. Server/client production builds neither link
-nor require it. Use a system helper or configure an unpacked distribution binary:
+The `_nat` variants and the host-crash and AddLocalGamer tests run each CNA process in its own
+rootless user and network namespace behind an outbound-only NAT helper, with identical private
+addresses and no inbound ports, so game data can only travel through the relay. They need
+unprivileged user namespaces, `unshare`, `ip` and a `slirp4netns` binary, which is executed, never
+linked:
 
 ```sh
-CNA_SERVICE_RELAY_CLIENT_HARNESS=/absolute/CNA/build/cna_service_relay_client_harness \
 CNA_SERVICE_SLIRP4NETNS=/absolute/slirp4netns \
 CNA_SERVICE_SLIRP_LIBRARY_PATH=/optional/unpacked/library/path \
-ctest --test-dir build -R '^service_cna_relay_nat$' --output-on-failure
+ctest --test-dir build -R '_nat$|host_crash|add_gamer' --output-on-failure
 ```
 
-`CNA_SERVICE_SLIRP_LIBRARY_PATH` applies only to helper subprocesses; omit it for system packages.
-The test explicitly skips (77) if its prerequisites/kernel permission are absent, and never
-changes host policy to enable them. Each child/helper is reclaimed on failure. With all four CNA
-probes and helper configured, **11/11 CTest pass**, no skip, **137.21s**; ordinary native relay
-**7.76s**, NAT-isolated native relay **8.14s**, independent adversarial WSS **47.18s**.
-Tested external helper: Debian slirp4netns 1.2.1-1.1 with libslirp 4.8.0-1+deb13u1, unpacked in
-`/tmp` without installation. Original test orchestration remains MIT; external dependency notices
-are in THIRD_PARTY.md. Public NetworkSession/invites, reconnect and roster/async integration remain
-unfinished; NAT isolation does not complete those parent tasks.
+Tested with Debian slirp4netns 1.2.1 and libslirp 4.8.0 unpacked outside the repository; their
+licenses are in [THIRD_PARTY.md](THIRD_PARTY.md). This is NAT-isolation evidence on one Linux host,
+not a measurement of public Internet latency or failover.
 
+### Avatars
 
-GS-007e2b public Find acceptance extends `service_cna_directory`: two primary CNA processes/four
-accounts plus another title's search process use standard BeginFind/EndFind, Update-thread callback,
-caller-owned metadata and End-once. Both PlayerMatch/Ranked filters survive service restart and
-expired secondary credentials; other titles see no advertisement. The same test's create/join,
-invites and heartbeat still use private control operations. This does not claim completed public
-NetworkSession lifecycle or avatar acceptance. Run with `CNA_SERVICE_DIRECTORY_CLIENT_HARNESS`
-pointing to the matching CNA `cna_service_directory_client_harness` executable.
-
-GS-007f1 schema 9 enforces lobby-only Ranked admission: enable-join-in-progress create/update
-requests are refused atomically; gameplay hides Ranked listings and refuses new ordinary or
-invited groups. Accepted invitations remain unconsumed on refusal. Existing identical group
-replay supports control idempotence without adding members. Migration repairs old true flags
-and advances revision while preserving participants. Back up databases before upgrading;
-normal server/admin open applies the migration transactionally. No control/CNR version change.
-
-GS-007e2c2 extends the same native directory test with owned preparation on CNA's service worker:
-acquire and validate membership, issue a one-use relay ticket, allocate a bounded loopback ENet
-host and wait for verified WSS readiness. Two local accounts retain the origin backend; an
-abandoned ready result closes transport and releases membership. Injected transport failures
-also roll back actual persisted host/join membership, checked by subsequent control reads/search.
-Successful ordinary and accepted invited preparations release only their own machine group.
-Completion runs at the client Update boundary. Cleanup during an outage can fail and then relies
-on the 90-second membership lease; client destruction can wait for bounded I/O. This preparation
-test does not establish ENet welcome completion or public NetworkSession Create/Join behavior;
-those remain the next integration step. The separate relay tests continue to provide actual
-ENet payload and isolated-NAT evidence.
-
-GS-008c3a also exercises the client's bounded directory/lease pump: authenticated full snapshots
-are returned at the caller update boundary, with one pending request per session. Native probes
-force lease renewal after a real server restart and again after admin-expired local credentials;
-fake-clock unit tests cover one-second polling and thirty-second independent renewal scheduling,
-owner publication, cancellation, stable failure/explicit same-origin retry and queue saturation.
-This is control-state pumping only. Conversion into XNA gamer/lifecycle events, relay status,
-ENet welcome completion and public online Create/Join remain unfinished.
-
-GS-008c3c1 applies CNA's service-bound packet policy in the actual native relay probes. Before
-copying game payloads, the client validates the authenticated relay source, completed realtime
-machine groups, sender ownership, target membership, options/channel and the 1MiB logical packet
-limit. The host refuses a forged existing sender and an unknown target without delivering either,
-while all four legitimate fragmented/unreliable packets still arrive each way. Control direction,
-complete groups and directory-owned state/properties are validated before game-object mutation.
-Native and separate rootless-NAT relay cases pass. This is a client admission boundary, not new
-server game parsing, public NetworkSession lifecycle completeness or malicious-host anti-cheat.
-
-GS-008c3c2 adds two owned CNA session-engine acceptance cases, preserving the separate raw
-hostile-packet probes. Configure `CNA_SERVICE_RELAY_CLIENT_HARNESS` and optional NAT helper
-variables as above, then run:
+Import each catalog CNA ships, then give accounts avatars:
 
 ```sh
-ctest --test-dir build -R '^service_cna_owned_enet(_nat)?$' --output-on-failure
+build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v1
+build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v2
+build/cna-gamer-services-admin service.sqlite3 avatar alice random male
 ```
 
-The real CNA owner now consumes prepared membership/transport, completes client readiness only
-with the exact service-authorized ENet welcome, publishes full connected-group observations,
-checks both local player slots and relays game data between admitted groups. Tests cover both
-categories/titles/four identities, 32KiB fragmented and unreliable data, secondary-account
-revocation, complete group departure, server failure and owned cleanup. NAT mode uses separate
-outbound-only namespaces with identical private addresses and no published inbound ports.
-Required missing harness/helpers return an explicit skip, never a pass. The raw cases retain
-malicious incoming fragment, source/size and forged ID checks. These are private-engine tests;
-public XNA Create/Join/events, reconnect and real Internet deployment qualification remain open.
-No protocol/schema changes, server decoding of game objects or Xbox LIVE compatibility.
-
-Final matching GS-008c3c2 corpus: **13/13 CTest pass, zero skips, 206.58s**. Includes native C++/C
-HTTPS persistence, directory/invites, raw WSS/native/NAT probes and the new owned engine cases
-(9.96s native / 11.59s NAT). Exact revisions are recorded in CNA's living plan. The server
-implementation and schema remain unchanged; this commit registers and documents acceptance.
-
-GS-007e2c3a advances the owned acceptance probe through CNA's dispatcher-driven online-operation
-coordinator. A launch barrier explicitly says pending, allowing both processes to pump during
-handshake. Completion runs once on the owner only after prepared host transport or exact client
-welcome, and End-style consumption transfers initial roster/data observations with the session.
-Raw probes are unchanged. Matching raw-native/raw-NAT/owned-native/owned-NAT cases **4/4 pass,
-41.94s** (9.82s, 10.58s, 10.43s, 11.09s), with no skip. Public XNA adapter remains unfinished;
-no server protocol, business logic or migration changed in this acceptance update.
-
-GS-007e2c3b public NetworkSession acceptance (2026-09-28): `service_cna_session` and
-`service_cna_session_nat` drive CNA's `cna_service_session_client_harness`, which uses only the
-standard XNA GamerServices/Net API (Guide sign-in keystrokes are the only simulated input). Per
-category/title: the host `BeginCreate`s a PlayerMatch or Ranked session for two Guide-signed-in
-accounts (pending result, one owner-thread callback, `EndCreate`); the joiner's property-filtered
-`Find` excludes a mismatch, returns the listing with exact slot counts, and `BeginJoin`/`EndJoin`
-produce the complete roster with the remote host. Both processes observe `GamerJoined` for all four
-gamers, shared per-machine views, distinct IDs, six sender-verified packets each way (reliable,
-32KiB `PacketWriter` and in-order), host property/join-in-progress and `StartGame`/`EndGame` on the
-remote machine; PlayerMatch client leave raises `GamerLeft` for its group, Ranked host leave raises
-`SessionEnded(HostEndedSession)` and Ranked refuses join-in-progress. NAT mode repeats it from two
-separate outbound-only rootless namespaces. Configure `CNA_SERVICE_SESSION_CLIENT_HARNESS` (plus the
-NAT helper variables above); a missing probe or helper is an explicit skip, never a pass.
-
-```sh
-CNA_SERVICE_SESSION_CLIENT_HARNESS=/absolute/CNA/build/cna_service_session_client_harness \
-ctest --test-dir build -R '^service_cna_session(_nat)?$' --output-on-failure
-```
-
-Full matching corpus with all five CNA probes and the NAT helper: **15/15 pass, zero skips,
-176.78s** (public session 8.12s, public session NAT 8.53s). No server code, schema or protocol
-change was needed; the client adapter lives in CNA. Invited joins/Guide, Ranked arbitration,
-reconnect and public Internet deployment qualification remain open.
-
-GS-007e3 invitations (2026-09-28): `service_cna_invite` and `service_cna_invite_nat` run the same
-public harness with `invite`: the host calls `Guide.ShowGameInvite(PlayerIndex.One, {})`, types the
-recipient gamertag into the Guide prompt and confirms; the recipient process polls its inbox,
-shows the Guide invitation prompt, accepts, receives `NetworkSession.InviteAccepted` for the
-invitee (IsCurrentSession=false) and calls synchronous `NetworkSession.JoinInvited(2)` inside that
-handler, exactly as the original Invites sample does; the rest of the lifecycle is then verified as
-above for both categories/titles. Only keystrokes and message-box clicks are simulated. Full corpus
-with all probes and the NAT helper: **17/17 pass, zero skips, 217.97s** (invite 18.51s, invite NAT
-20.39s; the recipient's first 5 s inbox poll dominates). No server code or schema change.
-
-GS-008d2 recovery (2026-09-28): `service_cna_session_restart` (and `_nat`) stop the real service
-between the roster and data phases of a live public session and restart it on the same port and
-database. Both CNA processes keep their standard NetworkSession: the relay reconnects with fresh
-one-use tickets while the loopback routes (so ENet peers) stay, directory reads/lease renewals are
-retried, and the session continues through data exchange, StartGame/EndGame, leaderboard commits,
-Ranked arbitration and departure. A reliable round trip precedes the data phase; right after the
-restart the one unreliable packet may be dropped by ENet's throttle, all reliable ones must arrive.
-Full corpus with every probe and the NAT helper: **20/20, zero skips, 340.73s**.
-
-### Avatars (schema 12, capability `avatars`)
-
-Each account can own one avatar description in CNA's v1 encoding; the service validates it against
-the avatar catalogs imported here. Import CNA's generated catalog, then give accounts avatars:
-
-```sh
-cna-gamer-services-admin state.sqlite3 avatar-catalog /path/to/CNA/modules/gamer-services/assets/avatars/v1
-cna-gamer-services-admin state.sqlite3 avatar alice random male     # or: female | clear | set (hex on stdin)
-```
-
-Catalog files are served from the immutable asset store by hash, so a CNA client that lacks an
-item of a newer catalog downloads, verifies and caches just that file. `service_cna_avatars` proves
-it with the standard XNA API: every catalog CNA embeds is imported, then one newer catalog with an
-extra hat; a format 2 avatar wearing that hat is read, only the hat is fetched and cached, and the
-avatar renders Ready. `service_avatar_validation` imports the same CNA catalogs as golden fixtures
-and refuses a long list of malformed models and manifests:
-
-```sh
-CNA_SERVICE_AVATAR_CLIENT_HARNESS=/absolute/CNA/build/cna_service_avatar_client_harness \
-CNA_AVATAR_CATALOGS=/absolute/CNA/modules/gamer-services/assets/avatars \
-ctest --test-dir build -R 'avatar' --output-on-failure
-```
+Catalog files are served from the immutable asset store by hash, so a CNA client that lacks an item
+of a newer catalog downloads, verifies and caches just that file. `service_cna_avatars` proves it
+with the standard XNA API, and `service_avatar_validation` uses CNA's catalogs as golden fixtures
+while refusing malformed models and manifests.
