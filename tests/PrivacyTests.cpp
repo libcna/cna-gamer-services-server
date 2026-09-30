@@ -112,6 +112,28 @@ int main() {
         check(error(s,"privacy.block",{{"gamertag","Alice"}},token["alice"])=="INVALID_ARGUMENT","not oneself");
         check(error(s,"privacy.block",{{"gamertag","Nobody"}},token["alice"])=="NOT_FOUND","unknown gamertag");
         check(error(s,"privacy.list",{{"extra",1}},token["alice"])=="INVALID_ARGUMENT","list takes nothing");
+        // GSH-04 FriendGamer.HasVoice: what the friend's live client last reported, only while it is
+        // online, and never for an account that may not communicate.
+        auto voiceOf=[&](const std::string& viewer,const std::string& tag) {
+            const auto list=call(s,"friends.list",Json::object(),token[viewer]);
+            for(const auto& row:list["result"]["friends"])
+                if(row["gamertag"]==tag)return row["hasVoice"].get<bool>();
+            throw std::runtime_error("no friend "+tag);
+        };
+        befriend("bob","Bob","alice","Alice");  // the block above ended their friendship
+        check(!voiceOf("alice","Bob"),"no report, no voice");
+        check(error(s,"auth.ping",{{"voice",true}},token["bob"])=="OK","Bob can talk");
+        check(voiceOf("alice","Bob"),"a friend with voice");
+        check(error(s,"auth.ping",Json::object(),token["bob"])=="OK"&&voiceOf("alice","Bob"),"a plain heartbeat keeps the report");
+        check(error(s,"auth.ping",{{"voice",false}},token["bob"])=="OK"&&!voiceOf("alice","Bob"),"a lost headset");
+        check(error(s,"auth.ping",{{"voice","yes"}},token["bob"])=="INVALID_ARGUMENT","voice is a boolean");
+        check(error(s,"auth.ping",{{"other",1}},token["bob"])=="INVALID_ARGUMENT","nothing else in a ping");
+        check(error(s,"auth.ping",{{"voice",true}},token["bob"])=="OK","talking again");
+        {Store store(path.string());store.exec("UPDATE sessions SET last_seen=last_seen-600 WHERE voice=1");}
+        check(!voiceOf("alice","Bob"),"a client that went quiet no longer has voice");
+        check(error(s,"auth.ping",{{"voice",true}},token["carol"])=="OK"&&voiceOf("alice","Carol"),"Carol can talk");
+        {Store store(path.string());store.privilege("carol","communication","blocked");}
+        check(!voiceOf("alice","Carol"),"an account that may not communicate has no voice");
         std::cout<<checks<<" privacy checks passed\n";
         return 0;
     } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}

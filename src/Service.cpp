@@ -150,7 +150,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     const auto& a=r["args"];
     static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","invites.joinFriend","parties.get","parties.invite","parties.accept","parties.decline","parties.leave","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack","privacy.block","privacy.unblock","privacy.list"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes","privacy"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes","privacy","friend-voice"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id,minimum_version FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     // A title may stop accepting old game versions (XNA GameUpdateRequiredException); a client that
@@ -287,7 +287,17 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
 }
 Json Service::execute(const std::string& op,const std::string& game,const std::string& user,const Json& r,const Json& a,long long timestamp) {
     if(op=="auth.refresh")return refreshCredentials(game,a);
-    if(op=="auth.ping")return Json{{"serverTime",timestamp}};
+    if(op=="auth.ping") {
+        // The client may say whether it can currently talk (XNA FriendGamer.HasVoice, capability
+        // friend-voice); a ping without it leaves the last report.
+        for(const auto& [key,value]:a.items()){(void)value;if(key!="voice")throw Error("INVALID_ARGUMENT");}
+        if(a.contains("voice")) {
+            if(!a["voice"].is_boolean())throw Error("INVALID_ARGUMENT");
+            Statement voice(store_.db(),"UPDATE sessions SET voice=? WHERE hash=?");
+            voice.bind(1,a["voice"].get<bool>()?1LL:0LL);voice.bind(2,sha256(stringField(r,"token",128)));(void)voice.row();
+        }
+        return Json{{"serverTime",timestamp}};
+    }
     if (op=="auth.logout") {
         const auto hash=sha256(stringField(r,"token",128));Statement scope(store_.db(),"SELECT refresh_family FROM sessions WHERE hash=?");scope.bind(1,hash);(void)scope.row();
         const auto family=scope.text(0);if(!family.empty())revokeFamily(family);
@@ -356,7 +366,8 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
         (void)s.row();hint(friendId,"friends");return Json::object();
     }
     if (op=="friends.list") {
-        Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,''),EXISTS(SELECT 1 FROM friends f WHERE f.user_id=? AND f.friend_id=u.id),EXISTS(SELECT 1 FROM friends f WHERE f.friend_id=? AND f.user_id=u.id),u.status FROM users u LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE u.id IN (SELECT friend_id FROM friends WHERE user_id=? UNION SELECT user_id FROM friends WHERE friend_id=?) ORDER BY u.gamertag LIMIT 257");
+        Statement s(store_.db(),"SELECT u.id,u.gamertag,EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>? AND z.last_seen>?),COALESCE(p.mode,0),COALESCE(p.text,''),EXISTS(SELECT 1 FROM friends f WHERE f.user_id=? AND f.friend_id=u.id),EXISTS(SELECT 1 FROM friends f WHERE f.friend_id=? AND f.user_id=u.id),u.status,"
+            "EXISTS(SELECT 1 FROM sessions z WHERE z.user_id=u.id AND z.expires>?1 AND z.last_seen>?2 AND z.voice=1) AND u.privilege_communication!='blocked' FROM users u LEFT JOIN presence p ON p.user_id=u.id AND p.game_id=? WHERE u.id IN (SELECT friend_id FROM friends WHERE user_id=? UNION SELECT user_id FROM friends WHERE friend_id=?) ORDER BY u.gamertag LIMIT 257");
         s.bind(1,timestamp);s.bind(2,timestamp-90);s.bind(3,user);s.bind(4,user);s.bind(5,game);s.bind(6,user);s.bind(7,user);
         Json friends=Json::array();
         while(s.row()) {
@@ -364,7 +375,7 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
             const bool accepted=s.number(5)&&s.number(6), online=accepted&&s.number(2);
             Json row{{"userId",s.text(0)},{"gamertag",s.text(1)},{"online",online},
                 {"presenceMode",online?s.number(3):0},{"presenceText",online?s.text(4):""},
-                {"away",online&&s.text(7)=="away"},{"busy",online&&s.text(7)=="busy"},
+                {"away",online&&s.text(7)=="away"},{"busy",online&&s.text(7)=="busy"},{"hasVoice",online&&s.number(8)!=0},
                 {"accepted",accepted},{"requestSent",!accepted&&s.number(5)!=0},{"requestReceived",!accepted&&s.number(6)!=0},
                 {"joinable",false},{"inviteReceivedFrom",false},{"inviteSentTo",false},{"inviteAccepted",false},{"inviteRejected",false}};
             if(accepted) {

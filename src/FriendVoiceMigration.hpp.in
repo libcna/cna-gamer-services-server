@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+inline constexpr const char* FriendVoiceMigration=R"SQL(@CNA_FRIEND_VOICE_MIGRATION@)SQL";

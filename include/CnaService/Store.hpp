@@ -37,7 +37,7 @@ private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 22;
+inline constexpr long long SchemaVersion = 23;
 /** @brief Checks game defaults (XNA GameDefaults): an object of at most the known keys, each with a
  * value of its kind. @param value Candidate. @throws Error INVALID_ARGUMENT otherwise. */
 void validateGameDefaults(const Json& value);
