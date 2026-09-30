@@ -42,6 +42,7 @@ Json Service::invitations(const std::string& user,const std::string& game,const 
         const auto recipient=target.text(0);
         if(recipient==user)throw Error("INVALID_ARGUMENT");
         if(!target.number(1))throw Error("NOT_AUTHORIZED");
+        mayCommunicate(user,recipient,false);
         Statement joined(store_.db(),"SELECT 1 FROM directory_members WHERE session_id=? AND user_id=?");joined.bind(1,session);joined.bind(2,recipient);
         if(joined.row())throw Error("INVALID_STATE");
         Statement duplicate(store_.db(),"SELECT id FROM session_invitations WHERE game_id=? AND session_id=? AND sender_id=? AND recipient_id=? AND status IN ('pending','accepted') AND expires>? ORDER BY created,id LIMIT 1");
@@ -73,6 +74,7 @@ Json Service::invitations(const std::string& user,const std::string& game,const 
         if(!target.row())throw Error("NOT_FOUND");
         const auto host=target.text(0);
         if(host==user)throw Error("INVALID_ARGUMENT");
+        mayCommunicate(user,host,false);
         Statement related(store_.db(),"SELECT (EXISTS(SELECT 1 FROM friends WHERE user_id=?1 AND friend_id=?2) AND EXISTS(SELECT 1 FROM friends WHERE user_id=?2 AND friend_id=?1)) "
             "OR EXISTS(SELECT 1 FROM party_members a JOIN party_members b ON a.party_id=b.party_id WHERE a.user_id=?1 AND b.user_id=?2)");
         related.bind(1,user);related.bind(2,host);(void)related.row();

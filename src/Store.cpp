@@ -25,6 +25,7 @@
 #include "TitleVersionMigration.hpp"
 #include "PartyMigration.hpp"
 #include "RequestOutcomeMigration.hpp"
+#include "PrivacyMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -137,6 +138,7 @@ Store::Store(const std::string& path) {
         if(current<19){exec("BEGIN IMMEDIATE");exec(TitleVersionMigration);exec("COMMIT");}
         if(current<20){exec("BEGIN IMMEDIATE");exec(PartyMigration);exec("COMMIT");}
         if(current<21){exec("BEGIN IMMEDIATE");exec(RequestOutcomeMigration);exec("COMMIT");}
+        if(current<22){exec("BEGIN IMMEDIATE");exec(PrivacyMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }
@@ -159,6 +161,24 @@ void validateGameDefaults(const Json& value) {
             if(text.size()!=7||text[0]!='#'||text.find_first_not_of("0123456789abcdefABCDEF",1)!=std::string::npos)throw Error("INVALID_ARGUMENT");
         } else throw Error("INVALID_ARGUMENT");
     }
+}
+void Store::privilege(const std::string& username,const std::string& name,const std::string& value) {
+    static const std::map<std::string,const char*> settings{
+        {"communication","UPDATE users SET privilege_communication=? WHERE username=?"},
+        {"profileViewing","UPDATE users SET privilege_profile_viewing=? WHERE username=?"},
+        {"userContent","UPDATE users SET privilege_user_content=? WHERE username=?"}};
+    static const std::map<std::string,const char*> switches{
+        {"trade","UPDATE users SET privilege_trade=? WHERE username=?"},
+        {"purchase","UPDATE users SET privilege_purchase=? WHERE username=?"},
+        {"premium","UPDATE users SET privilege_premium=? WHERE username=?"}};
+    if(const auto setting=settings.find(name);setting!=settings.end()) {
+        if(value!="everyone"&&value!="friends"&&value!="blocked")throw Error("INVALID_ARGUMENT");
+        Statement s(db_,setting->second);s.bind(1,value);s.bind(2,username);(void)s.row();
+    } else if(const auto flag=switches.find(name);flag!=switches.end()) {
+        if(value!="allowed"&&value!="blocked")throw Error("INVALID_ARGUMENT");
+        Statement s(db_,flag->second);s.bind(1,value=="allowed"?1LL:0LL);s.bind(2,username);(void)s.row();
+    } else throw Error("INVALID_ARGUMENT");
+    if(sqlite3_changes(db_)!=1)throw Error("NOT_FOUND");
 }
 void Store::gameDefaults(const std::string& username,const Json& value) {
     validateGameDefaults(value);

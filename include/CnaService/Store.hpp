@@ -37,7 +37,7 @@ private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 21;
+inline constexpr long long SchemaVersion = 22;
 /** @brief Checks game defaults (XNA GameDefaults): an object of at most the known keys, each with a
  * value of its kind. @param value Candidate. @throws Error INVALID_ARGUMENT otherwise. */
 void validateGameDefaults(const Json& value);
@@ -86,6 +86,10 @@ public:
     std::string asset(const std::string& game,const std::string& mime,std::string_view bytes);
     /** @brief Associates user picture. @param username Account. @param hash Existing asset hash. */
     void picture(const std::string& username,const std::string& hash);
+    /** @brief Sets one of an account's XNA privileges (the operator's parental control).
+     * @param username Account. @param name communication, profileViewing or userContent (value
+     * everyone, friends or blocked); trade, purchase or premium (value allowed or blocked). */
+    void privilege(const std::string& username,const std::string& name,const std::string& value);
     /** @brief Replaces an account's game defaults. @param username Account. @param value Valid defaults. */
     void gameDefaults(const std::string& username,const Json& value);
     /** @brief Defines immutable leaderboard policy. @param game Title. @param definition Policy. */

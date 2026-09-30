@@ -25,6 +25,7 @@ int main(int argc,char** argv) {
             std::ifstream input(argv[5],std::ios::binary);if(!input)throw CnaService::Error("NOT_FOUND");
             std::string bytes((std::istreambuf_iterator<char>(input)),{});std::cout<<store.asset(argv[3],argv[4],bytes)<<'\n';
         } else if(command=="picture"&&argc==5) {store.picture(argv[3],argv[4]);
+        } else if(command=="privilege"&&argc==6) {store.privilege(argv[3],argv[4],argv[5]);
         } else if(command=="avatar-catalog"&&argc==4) {
             // Imports a CNA avatar catalog directory (tools/avatar_builder/generate_avatar_catalog.py).
             const std::filesystem::path directory(argv[3]);

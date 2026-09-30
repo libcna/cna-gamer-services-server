@@ -87,6 +87,11 @@ private:
     Json avatars(const std::string& user,const std::string& op,const Json& args,long long now);
     const CatalogInfo& catalog(long long version);
     Json invitationSnapshot(const std::string& id);
+    bool friendsWith(const std::string& a,const std::string& b);
+    void mayCommunicate(const std::string& from,const std::string& to,bool friendRequest);
+    void mayView(const std::string& viewer,const std::string& target);
+    Json privileges(const std::string& user);
+    Json privacy(const std::string& user,const std::string& op,const Json& args);
 
     Store store_;
     std::mutex mutex_;

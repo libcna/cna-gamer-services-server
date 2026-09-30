@@ -64,6 +64,7 @@ Json Service::parties(const std::string& user,const std::string& game,const std:
         Statement friends(store_.db(),"SELECT EXISTS(SELECT 1 FROM friends WHERE user_id=?1 AND friend_id=?2) AND EXISTS(SELECT 1 FROM friends WHERE user_id=?2 AND friend_id=?1)");
         friends.bind(1,user);friends.bind(2,recipient);(void)friends.row();
         if(!friends.number(0))throw Error("NOT_AUTHORIZED");
+        mayCommunicate(user,recipient,false);
         auto party=current();
         if(!party) {
             party=randomHex(16);

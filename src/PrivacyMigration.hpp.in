@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+inline constexpr const char* PrivacyMigration=R"SQL(@CNA_PRIVACY_MIGRATION@)SQL";

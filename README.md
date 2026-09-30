@@ -42,7 +42,7 @@ ordinary ENet datagrams the server never inspects.
 
 Not provided: Xbox LIVE compatibility of any kind; account self-registration or password change
 over the wire (the administrator provisions accounts; gamer pictures are set by the administrator,
-mottos and regions not at all); privacy and block settings; TrueSkill computation; time windows for
+mottos and regions not at all); TrueSkill computation; time windows for
 the `...Recent` leaderboard keys; direct peer-to-peer connections (every online datagram goes
 through the relay); a store (Marketplace), PartnerToken and title update delivery. Linux is the
 tested server host; Windows and macOS builds are unvalidated. CNA's
@@ -78,6 +78,7 @@ server and never prints a credential. Passwords and JSON documents come from std
 | `achievement <title>` | Adds an achievement from JSON on stdin (`key`, `name`, `description`, `howToEarn`, `score`, optional `picture` hash) |
 | `leaderboard <title>` / `seed-leaderboard <title>` | Defines a board / inserts a fixture row, JSON on stdin |
 | `asset <title> <mime> <file>` | Imports a PNG (<=512x512, <=512 KiB) or GLB (<=16 MiB); prints its hash |
+| `privilege <username> <name> <value>` | Sets an XNA `GamerPrivileges` value for an account, the operator's stand-in for parental controls: `communication`, `profileViewing` or `userContent` to `everyone`, `friends` or `blocked`; `trade`, `purchase` or `premium` to `allowed` or `blocked`. It reaches the player at their next sign-in, and the service enforces it at once (`protocol/v1.md`, Privacy) |
 | `picture <username> <hash>` | Sets a gamer picture |
 | `avatar-catalog <directory>` | Imports and fully validates a CNA avatar catalog (`assets/avatars/v1`, `v2`, `v3`) |
 | `avatar <username> random [male\|female]`, `clear` or `set` | Gives an account an avatar (`set` reads the description hex from stdin) |

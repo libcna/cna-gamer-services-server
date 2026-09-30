@@ -16,14 +16,14 @@ namespace {
 const std::set<std::string> Ephemeral{"auth.ping","gamer.lookup","profile.get","profile.gameDefaults","friends.list",
     "presence.set","achievements.list","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","parties.get","sessions.relayTicket",
     "sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited",
-    "sessions.leave","sessions.remove","sessions.addMembers","invites.list","invites.get","messages.list","avatars.get","avatars.catalog","avatars.catalogPack"};
+    "sessions.leave","sessions.remove","sessions.addMembers","invites.list","invites.get","messages.list","avatars.get","avatars.catalog","avatars.catalogPack","privacy.list"};
 // Replay protection is for requests whose repetition would change something twice. Reads, and
 // writes that replace a value outright and recur on a timer (heartbeat, lease, presence), repeat
 // harmlessly; recording them would spend a title's daily budget on its own keep-alive traffic.
 const std::set<std::string> Unrecorded{"auth.ping","sessions.touch","presence.set","presence.status","gamer.lookup",
     "profile.get","profile.gameDefaults","friends.list","achievements.list","assets.read","leaderboards.read",
     "leaderboards.definition","leaderboards.list","parties.get","sessions.find","sessions.get","invites.list","invites.get","messages.list",
-    "avatars.get","avatars.catalog","avatars.catalogPack"};
+    "avatars.get","avatars.catalog","avatars.catalogPack","privacy.list"};
 // Recorded request IDs per title and 24 hours: the storage backstop.
 constexpr long long MaxTitleRequestIds=1000000;
 // Recorded request IDs per account, title and 24-hour window, so that no one account can spend
@@ -148,9 +148,9 @@ Json Service::identity(const std::string& id) {
 Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<std::mutex>& lock) {
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
-    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","invites.joinFriend","parties.get","parties.invite","parties.accept","parties.decline","parties.leave","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack"};
+    static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","invites.joinFriend","parties.get","parties.invite","parties.accept","parties.decline","parties.leave","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack","privacy.block","privacy.unblock","privacy.list"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes","privacy"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id,minimum_version FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     // A title may stop accepting old game versions (XNA GameUpdateRequiredException); a client that
@@ -298,6 +298,7 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
         const auto gamertag=stringField(a,"gamertag",32);
         Statement s(store_.db(),"SELECT id FROM users WHERE gamertag=?");s.bind(1,gamertag);
         if (!s.row()) throw Error("NOT_FOUND");
+        mayView(user,s.text(0));
         return identity(s.text(0));
     }
     if (op=="presence.set") {
@@ -334,6 +335,7 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
         if (!target.row()) throw Error("NOT_FOUND");
         if (target.text(0)==user) throw Error("INVALID_ARGUMENT");
         const auto friendId=target.text(0);
+        if(op!="friends.remove")mayCommunicate(user,friendId,true);
         if(op=="friends.accept") {
             Statement incoming(store_.db(),"SELECT 1 FROM friends WHERE user_id=? AND friend_id=?");
             incoming.bind(1,friendId);incoming.bind(2,user);if(!incoming.row())throw Error("INVALID_STATE");
@@ -416,6 +418,7 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
             Statement target(store_.db(),"SELECT id FROM users WHERE gamertag=?");target.bind(1,tag.get<std::string>());
             if(!target.row())throw Error("NOT_FOUND");
             if(target.text(0)==user||!seen.insert(target.text(0)).second)throw Error("INVALID_ARGUMENT");
+            mayCommunicate(user,target.text(0),false);
             Statement inbox(store_.db(),"SELECT COUNT(*) FROM messages WHERE recipient_id=?");inbox.bind(1,target.text(0));(void)inbox.row();
             if(inbox.number(0)>=100)throw Error("LIMIT_EXCEEDED");
             recipients.push_back(target.text(0));
@@ -462,6 +465,7 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
         return Json::object();
     }
     if(op.starts_with("avatars."))return avatars(user,op,a,timestamp);
+    if(op.starts_with("privacy."))return privacy(user,op,a);
     if(op.starts_with("invites."))return invitations(user,game,op,a);
     if(op.starts_with("parties."))return parties(user,game,op,a);
     if(op=="sessions.relayTicket")return issueRelayTicket(user,game,a);
