@@ -1,0 +1,451 @@
+{
+ "what": "tests/service_benchmark.py: the real TLS server on a scratch database, one client process per player, each on its own 127.x.y.z source address. One machine, shared with other work; not a capacity guarantee.",
+ "date": "2026-09-30",
+ "server": {
+  "commit": "824decd",
+  "build": "Release (-O3 -DNDEBUG), build-probe/",
+  "compiler": "GCC 14.2.0 (Debian 14.2.0-19)",
+  "openssl": "3.5.7",
+  "sqlite": "3.46.1"
+ },
+ "cna": "not involved (the benchmark client is Python)",
+ "machine": {
+  "cpu": "AMD Ryzen 7 PRO 7840U, 8 cores / 16 threads, up to 5.1 GHz",
+  "memory": "30 GiB",
+  "os": "Debian GNU/Linux 13 (trixie), Linux 6.12.107 x86_64",
+  "python": "3.11.9",
+  "network": "loopback"
+ },
+ "command": "python3 tests/service_benchmark.py build-probe --json <file>  (defaults: --players 64 --signers 8 --idle 160 --seconds 15 --replay-fill 90000 --scenarios steady,logins,idle,replay,descriptors)",
+ "loadAverage": {
+  "start": "5.65 9.08 7.82",
+  "end": "4.60 7.98 7.54"
+ },
+ "results": [
+  {
+   "scenario": "steady",
+   "seconds": 15,
+   "requests": 18151,
+   "throughput": 1210.1,
+   "latencyMs": {
+    "p50": 47.94,
+    "p95": 87.9,
+    "p99": 117.68,
+    "max": 191.46
+   },
+   "errors": {},
+   "operations": {
+    "achievements.list": {
+     "count": 880,
+     "p50": 47.92,
+     "p95": 85.36,
+     "p99": 110.78
+    },
+    "auth.ping": {
+     "count": 6368,
+     "p50": 47.91,
+     "p95": 86.0,
+     "p99": 113.67
+    },
+    "friends.list": {
+     "count": 2686,
+     "p50": 48.01,
+     "p95": 93.57,
+     "p99": 120.67
+    },
+    "leaderboards.read": {
+     "count": 1840,
+     "p50": 47.96,
+     "p95": 88.82,
+     "p99": 118.17
+    },
+    "presence.set": {
+     "count": 1811,
+     "p50": 47.9,
+     "p95": 85.3,
+     "p99": 110.97
+    },
+    "presence.status": {
+     "count": 840,
+     "p50": 48.01,
+     "p95": 94.07,
+     "p99": 118.55
+    },
+    "profile.get": {
+     "count": 1846,
+     "p50": 47.91,
+     "p95": 87.93,
+     "p99": 118.74
+    },
+    "sessions.find": {
+     "count": 1762,
+     "p50": 47.95,
+     "p95": 91.88,
+     "p99": 124.51
+    },
+    "sessions.touch": {
+     "count": 118,
+     "p50": 47.89,
+     "p95": 88.29,
+     "p99": 129.38
+    }
+   },
+   "requestIds": 80
+  },
+  {
+   "scenario": "logins",
+   "seconds": 15,
+   "requests": 15199,
+   "throughput": 1013.3,
+   "latencyMs": {
+    "p50": 60.29,
+    "p95": 87.78,
+    "p99": 410.94,
+    "max": 1282.74
+   },
+   "errors": {},
+   "operations": {
+    "achievements.list": {
+     "count": 727,
+     "p50": 57.68,
+     "p95": 83.22,
+     "p99": 94.18
+    },
+    "auth.login": {
+     "count": 253,
+     "p50": 427.92,
+     "p95": 794.46,
+     "p99": 835.47
+    },
+    "auth.ping": {
+     "count": 5219,
+     "p50": 58.6,
+     "p95": 83.97,
+     "p99": 93.45
+    },
+    "friends.list": {
+     "count": 2222,
+     "p50": 62.45,
+     "p95": 88.42,
+     "p99": 100.03
+    },
+    "leaderboards.read": {
+     "count": 1516,
+     "p50": 60.79,
+     "p95": 85.16,
+     "p99": 94.1
+    },
+    "presence.set": {
+     "count": 1490,
+     "p50": 58.63,
+     "p95": 84.37,
+     "p99": 93.32
+    },
+    "presence.status": {
+     "count": 691,
+     "p50": 65.14,
+     "p95": 89.28,
+     "p99": 100.07
+    },
+    "profile.get": {
+     "count": 1523,
+     "p50": 57.94,
+     "p95": 84.21,
+     "p99": 92.34
+    },
+    "sessions.find": {
+     "count": 1459,
+     "p50": 61.27,
+     "p95": 85.29,
+     "p99": 94.5
+    },
+    "sessions.touch": {
+     "count": 99,
+     "p50": 60.17,
+     "p95": 86.93,
+     "p99": 98.04
+    }
+   },
+   "requestIds": 413
+  },
+  {
+   "scenario": "idle",
+   "seconds": 15,
+   "requests": 17418,
+   "throughput": 1161.2,
+   "latencyMs": {
+    "p50": 52.75,
+    "p95": 72.97,
+    "p99": 83.84,
+    "max": 126.86
+   },
+   "errors": {},
+   "operations": {
+    "achievements.list": {
+     "count": 842,
+     "p50": 52.52,
+     "p95": 73.24,
+     "p99": 81.95
+    },
+    "auth.ping": {
+     "count": 6108,
+     "p50": 52.12,
+     "p95": 71.68,
+     "p99": 82.63
+    },
+    "friends.list": {
+     "count": 2585,
+     "p50": 54.74,
+     "p95": 75.85,
+     "p99": 84.68
+    },
+    "leaderboards.read": {
+     "count": 1756,
+     "p50": 53.04,
+     "p95": 72.54,
+     "p99": 84.67
+    },
+    "presence.set": {
+     "count": 1729,
+     "p50": 51.91,
+     "p95": 70.92,
+     "p99": 80.11
+    },
+    "presence.status": {
+     "count": 806,
+     "p50": 57.11,
+     "p95": 79.2,
+     "p99": 90.52
+    },
+    "profile.get": {
+     "count": 1787,
+     "p50": 51.88,
+     "p95": 72.44,
+     "p99": 84.9
+    },
+    "sessions.find": {
+     "count": 1690,
+     "p50": 53.01,
+     "p95": 72.6,
+     "p99": 81.68
+    },
+    "sessions.touch": {
+     "count": 115,
+     "p50": 53.57,
+     "p95": 73.33,
+     "p99": 85.7
+    }
+   },
+   "idleConnectionsHeld": 160,
+   "idleConnectionsReopened": 410768,
+   "requestIds": 493
+  },
+  {
+   "scenario": "replay",
+   "seconds": 15,
+   "requests": 20025,
+   "throughput": 1335.0,
+   "latencyMs": {
+    "p50": 47.83,
+    "p95": 52.45,
+    "p99": 71.3,
+    "max": 102.82
+   },
+   "errors": {},
+   "operations": {
+    "achievements.list": {
+     "count": 969,
+     "p50": 47.86,
+     "p95": 52.14,
+     "p99": 70.98
+    },
+    "auth.ping": {
+     "count": 7012,
+     "p50": 47.82,
+     "p95": 52.42,
+     "p99": 70.13
+    },
+    "friends.list": {
+     "count": 2966,
+     "p50": 47.87,
+     "p95": 52.36,
+     "p99": 72.35
+    },
+    "leaderboards.read": {
+     "count": 2043,
+     "p50": 47.84,
+     "p95": 52.85,
+     "p99": 70.46
+    },
+    "presence.set": {
+     "count": 1979,
+     "p50": 47.79,
+     "p95": 52.13,
+     "p99": 66.25
+    },
+    "presence.status": {
+     "count": 927,
+     "p50": 47.81,
+     "p95": 55.02,
+     "p99": 74.03
+    },
+    "profile.get": {
+     "count": 2027,
+     "p50": 47.8,
+     "p95": 53.13,
+     "p99": 68.67
+    },
+    "sessions.find": {
+     "count": 1977,
+     "p50": 47.85,
+     "p95": 52.57,
+     "p99": 73.36
+    },
+    "sessions.touch": {
+     "count": 125,
+     "p50": 47.74,
+     "p95": 51.86,
+     "p99": 60.24
+    }
+   },
+   "requestIds": 90080
+  },
+  {
+   "scenario": "descriptors",
+   "serverSurvived": true,
+   "helloAfter": "OK"
+  }
+ ],
+ "comparison": {
+  "what": "steady and logins, the audited server (a85a146) and this one (824decd) alternated three times in the same minutes",
+  "runs": [
+   {
+    "server": "824decd",
+    "round": 1,
+    "scenario": "steady",
+    "throughput": 1227.8,
+    "p50": 47.95,
+    "p99": 82.06
+   },
+   {
+    "server": "824decd",
+    "round": 1,
+    "scenario": "logins",
+    "throughput": 1024.5,
+    "p50": 59.31,
+    "p99": 389.0
+   },
+   {
+    "server": "824decd",
+    "round": 2,
+    "scenario": "steady",
+    "throughput": 1109.9,
+    "p50": 52.7,
+    "p99": 89.39
+   },
+   {
+    "server": "824decd",
+    "round": 2,
+    "scenario": "logins",
+    "throughput": 1002.9,
+    "p50": 59.39,
+    "p99": 398.62
+   },
+   {
+    "server": "824decd",
+    "round": 3,
+    "scenario": "steady",
+    "throughput": 1264.5,
+    "p50": 47.96,
+    "p99": 71.51
+   },
+   {
+    "server": "824decd",
+    "round": 3,
+    "scenario": "logins",
+    "throughput": 821.3,
+    "p50": 70.15,
+    "p99": 440.03
+   },
+   {
+    "server": "a85a146",
+    "round": 1,
+    "scenario": "steady",
+    "throughput": 1209.3,
+    "p50": 48.13,
+    "p99": 71.88
+   },
+   {
+    "server": "a85a146",
+    "round": 1,
+    "scenario": "logins",
+    "throughput": 929.1,
+    "p50": 64.64,
+    "p99": 445.61
+   },
+   {
+    "server": "a85a146",
+    "round": 2,
+    "scenario": "steady",
+    "throughput": 1237.6,
+    "p50": 48.35,
+    "p99": 72.19
+   },
+   {
+    "server": "a85a146",
+    "round": 2,
+    "scenario": "logins",
+    "throughput": 969.3,
+    "p50": 61.23,
+    "p99": 427.55
+   },
+   {
+    "server": "a85a146",
+    "round": 3,
+    "scenario": "steady",
+    "throughput": 1268.7,
+    "p50": 47.94,
+    "p99": 71.68
+   },
+   {
+    "server": "a85a146",
+    "round": 3,
+    "scenario": "logins",
+    "throughput": 1020.3,
+    "p50": 57.82,
+    "p99": 403.3
+   }
+  ]
+ },
+ "underLoad": {
+  "what": "the same full run minutes earlier while other work kept the load average at 13-17: throughput halves, which is why a single number here is one machine at one moment",
+  "loadAverage": "13.05 -> 16.95",
+  "results": [
+   {
+    "scenario": "steady",
+    "throughput": 594.4,
+    "p50": 85.27
+   },
+   {
+    "scenario": "logins",
+    "throughput": 463.5,
+    "p50": 106.99
+   },
+   {
+    "scenario": "idle",
+    "throughput": 658.5,
+    "p50": 93.3
+   },
+   {
+    "scenario": "replay",
+    "throughput": 621.5,
+    "p50": 84.16
+   },
+   {
+    "scenario": "descriptors",
+    "throughput": null,
+    "p50": null
+   }
+  ]
+ }
+}

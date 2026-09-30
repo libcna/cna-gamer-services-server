@@ -162,8 +162,8 @@ The server is built to face untrusted clients, but a public deployment still nee
    before every upgrade (migrations only go forward).
 7. **Monitoring** of the per-minute statistics line: alert on `INTERNAL_ERROR`, on `refused` rising
    and on `RATE_LIMITED` bursts.
-8. **Capacity.** One process, one machine (see below): about 1,300 requests a second on the reference
-   machine, while an idle player costs about two a minute.
+8. **Capacity.** One process, one machine (see below): about 1,200 requests a second in the committed
+   measurement (`benchmarks/`), while an idle player costs about two a minute.
 
 ## Capacity
 
@@ -175,26 +175,30 @@ authenticated mix, no think time), `logins` (the same plus eight clients signing
 
 ```sh
 cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-probe
-python3 tests/service_benchmark.py build-probe --keep-alive --replay-fill 200000 --json result.json
+python3 tests/service_benchmark.py build-probe --json result.json
 ```
 
-Release build, 64 players, 15 s windows, a 16-core Linux machine shared with other work, loopback,
-2026-09-29. "Before" is the server at `a1b2a51`, "after" includes the audit fixes below:
+The evidence is committed in [`benchmarks/`](benchmarks/): each run's commit, build, compiler,
+CPU, OS, load, arguments and every scenario's numbers. The current one
+(`benchmarks/2026-09-30-824decd.json`: Release, GCC 14.2, AMD Ryzen 7 PRO 7840U with 16 threads,
+Debian 13, loopback, 64 players, 15 s windows, load average about 5-9 from other work):
 
-| Scenario | Before | After |
-|---|---|---|
-| steady | 73 req/s, p50 703 ms, p99 3.6 s | 1,602 req/s, p50 38 ms, p99 67 ms |
-| sign-in storm | 42 req/s; everything p50 1.47 s | 1,193 req/s; ordinary p50 49 ms; sign-in p50 373 ms, about 11/s |
-| one address, 160 idle connections | 60 of 64 players could not sign in | no failures, 1,440 req/s |
-| full request-ID table | 188 req/s at 90,000 IDs (with the fsync fix already in) | 1,964 req/s at 200,000 IDs |
-| descriptors exhausted | server exited | keeps serving |
+| Scenario | Result |
+|---|---|
+| steady | 1,210 req/s, p50 48 ms, p99 118 ms |
+| sign-in storm (8 clients signing in continuously) | 1,013 req/s, p99 411 ms |
+| one address, 160 idle connections | 1,161 req/s, no failures |
+| request-ID table at 90,000 | 1,335 req/s |
+| descriptors exhausted | keeps serving |
 
-Re-run at `4bc685c` (catalog packs, title versions, parties), same command, with the machine
-busier (load average about 4.3 from other work): steady 1,312 req/s, p50 44 ms, p99 73 ms; sign-in
-storm 1,024 req/s, sign-in p50 408 ms; 160 idle connections 1,127 req/s; 200,000 request IDs
-1,507 req/s; descriptors exhausted, still serving; no errors in any scenario. In the same minutes the
-server before this work (`4ba7f95`) measured 1,329 and 992 req/s steady, so the lower figures are
-the load, not the new operations.
+No errors in any scenario. These are one shared machine's figures at one moment: the same run
+minutes earlier, under a load average of 13-17, measured half as much.
+
+The audit fixes of 2026-09-29 were measured before and after on the same machine; that output was
+not kept, so these figures are history rather than evidence: steady 73 -> 1,602 req/s, sign-in
+storm 42 -> 1,193, 160 idle connections from one address locked 60 of 64 players out -> no
+failures, a full request-ID table 188 -> 1,964 req/s at 200,000 IDs (`--keep-alive --replay-fill
+200000`), and a server out of descriptors exited -> keeps serving.
 
 These are closed-loop saturation figures. A player idling in a menu costs about two requests a
 minute (the heartbeat), so the real ceiling depends on what games do between heartbeats. Password
