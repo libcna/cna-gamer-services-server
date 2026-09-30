@@ -135,9 +135,26 @@ process ends, crash included, so no stale lock is ever left behind (`tests/Datab
 measured on Linux, and the Windows code under Wine, not on Windows itself). The admin tool
 deliberately takes no lock and works beside a running server. Back up a running server with
 SQLite's online backup, which is consistent under WAL: `sqlite3 service.sqlite3 ".backup
-service-backup.sqlite3"`. One address may hold 32 control connections and open 600 new ones a
-minute (each costs a TLS handshake); put a firewall or proxy in front of the server against floods
-from many addresses.
+service-backup.sqlite3"`.
+
+### Connection and rate limits, precisely
+
+| Limit | Applied | Counted |
+|---|---|---|
+| 256 connections in the shared pool (control requests, and relay upgrades not yet authorized; an authorized relay leaves the pool) | at accept, **before** the TLS handshake | server-wide |
+| 32 connections held in that pool | at accept, before the handshake | per source address |
+| 600 new connections a minute | at accept, before the handshake | per source address |
+| TLS handshake must finish within 10 s | during the handshake | per connection |
+| 10 sign-ins (and refreshes) a minute | after the handshake, per request | per source address (at most 4,096 addresses tracked; beyond that, unknown addresses are refused) |
+| 20,000 recorded requests a day per account and title; 1,024 relays; 4,096 event channels | after authentication | per account / server |
+
+A refused connection is closed at once and costs no handshake, so **one address** can cost the
+server at most 32 concurrent handshakes and 600 a minute, and can hold at most 32 of the 256 pool
+slots. **Many addresses** are not limited together: there is no server-wide handshake rate. Eight
+or more addresses that open connections and stall their handshakes can keep the pool full (each slot
+is freed after 10 s), and a large number of addresses completing handshakes costs CPU without any
+bound in the server. That is a distributed flood; the server does not defend against it and CNA
+does not claim DDoS protection. Put a firewall, L4 proxy or DDoS filter in front (see below).
 
 ## Before exposing it on the public internet
 
@@ -153,8 +170,11 @@ The server is built to face untrusted clients, but a public deployment still nee
    server terminates TLS itself: put an L4 (TCP) filter in front, not a TLS-terminating proxy, which
    would also make every player appear to come from the proxy's address and share its per-address
    limits.
-4. **Flood protection in front.** Per-address limits stop one address (32 connections, 600 new ones
-   and 10 sign-ins a minute); floods from many addresses need a firewall or DDoS filter upstream.
+4. **Flood protection in front.** The server's own limits are per address and stop one address
+   (32 connections, 600 new ones a minute, both before the TLS handshake; 10 sign-ins a minute).
+   Nothing in the server limits many addresses together -- not their connections, not their TLS
+   handshakes -- so a distributed flood needs a firewall, connection-rate limiting or a DDoS filter
+   upstream (see "Connection and rate limits, precisely").
 5. **Titles and accounts.** Create each title (`title`), import its achievements, leaderboards and
    avatar catalogs, and set `title-minimum-version` when old game builds must update. Accounts are
    created by the operator (`user`); there is no self-registration and no password reset by mail.
