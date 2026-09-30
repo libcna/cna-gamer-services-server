@@ -114,7 +114,8 @@ int main() {
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","legacy ranked flag cannot allow gameplay join");
         // A real schema 8 database has no allow_migration or title minimum version either; the running
         // service above still needed them.
-        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK&&sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration; ALTER TABLE titles DROP COLUMN minimum_version; ALTER TABLE session_invitations DROP COLUMN requested",nullptr,nullptr,nullptr)==SQLITE_OK,"legacy schema without host migration");sqlite3_close(raw);}
+        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK&&sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration; ALTER TABLE titles DROP COLUMN minimum_version; ALTER TABLE session_invitations DROP COLUMN requested; "
+            "ALTER TABLE request_ids DROP COLUMN user_id; ALTER TABLE request_ids DROP COLUMN op; ALTER TABLE request_ids DROP COLUMN outcome; ALTER TABLE request_ids DROP COLUMN result",nullptr,nullptr,nullptr)==SQLITE_OK,"legacy schema without host migration");sqlite3_close(raw);}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==SchemaVersion,"ranked policy schema upgrade");}
         auto migrated=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];
         check(migrated["allowJoinInProgress"]==false&&migrated["revision"]==priorRevision+1,"migration repairs flag and revision");

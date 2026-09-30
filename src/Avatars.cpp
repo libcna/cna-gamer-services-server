@@ -211,12 +211,11 @@ int storeCatalog(Store& store,const Json& manifest,long long version,const std::
     const std::map<std::string,std::string>& files,const std::map<long long,int>& items)
 {
     const auto canonical=manifest.dump();
-    store.exec("BEGIN IMMEDIATE");
-    try {
+    {
+        Store::Transaction transaction(store);
         Statement existing(store.db(),"SELECT manifest FROM avatar_catalogs WHERE version=?");existing.bind(1,version);
         if(existing.row()) {
             if(existing.text(0)!=canonical)throw Error("CONFLICT");
-            store.exec("COMMIT");
             return static_cast<int>(version);
         }
         // Catalogs only grow: every item of the newest earlier catalog keeps its id and slot.
@@ -242,8 +241,8 @@ int storeCatalog(Store& store,const Json& manifest,long long version,const std::
             Statement row(store.db(),"INSERT INTO avatar_catalog_items(version,id,slot) VALUES(?,?,?)");
             row.bind(1,version);row.bind(2,id);row.bind(3,static_cast<long long>(slot));(void)row.row();
         }
-        store.exec("COMMIT");
-    } catch(...) {store.exec("ROLLBACK");throw;}
+        transaction.commit();
+    }
     return static_cast<int>(version);
 }
 }

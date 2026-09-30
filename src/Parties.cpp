@@ -18,14 +18,6 @@ std::string partyId(const Json& args) {
     return value;
 }
 
-class PartyTransaction {
-public:
-    explicit PartyTransaction(Store& store):store_(store){store_.exec("BEGIN IMMEDIATE");}
-    ~PartyTransaction(){if(!committed_)try{store_.exec("ROLLBACK");}catch(...){}}
-    void commit(){store_.exec("COMMIT");committed_=true;}
-private:
-    Store& store_;bool committed_=false;
-};
 }
 
 Json Service::parties(const std::string& user,const std::string& game,const std::string& op,const Json& args) {
@@ -35,7 +27,7 @@ Json Service::parties(const std::string& user,const std::string& game,const std:
     if(args.size()!=definition->second.size())throw Error("INVALID_ARGUMENT");
     for(const auto& [key,value]:args.items()){(void)value;if(!definition->second.contains(key))throw Error("INVALID_ARGUMENT");}
     const auto timestamp=now();
-    PartyTransaction transaction(store_);
+    Store::Transaction transaction(store_);
     Statement expire(store_.db(),"DELETE FROM party_invitations WHERE created<=?");expire.bind(1,timestamp-PartyInvitationSeconds);(void)expire.row();
     auto current=[&]()->std::optional<std::string> {
         Statement member(store_.db(),"SELECT party_id FROM party_members WHERE user_id=?");member.bind(1,user);

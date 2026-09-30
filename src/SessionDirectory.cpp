@@ -19,14 +19,6 @@ std::string kindField(const Json& args) {
     if(kind!="player"&&kind!="ranked")throw Error("INVALID_ARGUMENT");
     return kind;
 }
-class Transaction {
-public:
-    explicit Transaction(Store& store):store_(store){store_.exec("BEGIN IMMEDIATE");}
-    ~Transaction(){if(!committed_)try{store_.exec("ROLLBACK");}catch(...){}}
-    void commit(){store_.exec("COMMIT");committed_=true;}
-private:
-    Store& store_;bool committed_=false;
-};
 }
 // XNA host migration. Which machine takes over is CNA policy (XNA shows only that the host changed):
 // the machine holding the lowest remaining ordinal, its owner the host account; the session's lease
@@ -42,7 +34,7 @@ bool Service::migrateDirectoryHost(const std::string& session,const std::string&
     return true;
 }
 void Service::pruneDirectory() {
-    Transaction transaction(store_);
+    Store::Transaction transaction(store_);
     // A host lost with migration allowed hands over before the lapsed sessions are closed.
     Statement orphaned(store_.db(),"SELECT id,host_machine FROM directory_sessions WHERE allow_migration=1 AND revision<2147483646 AND "
         "NOT EXISTS(SELECT 1 FROM directory_machines m WHERE m.id=host_machine AND m.expires>?)");
@@ -114,7 +106,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         const bool allowJoin=booleanField(args,"allowJoinInProgress");
         if(kind=="ranked"&&allowJoin)throw Error("INVALID_ARGUMENT");
         const bool migrate=args.contains("allowHostMigration")&&booleanField(args,"allowHostMigration");
-        const auto id=randomHex(16),machine=randomHex(16);Transaction transaction(store_);
+        const auto id=randomHex(16),machine=randomHex(16);Store::Transaction transaction(store_);
         Statement cap(store_.db(),"SELECT COUNT(*),SUM(CASE WHEN host_id=? THEN 1 ELSE 0 END) FROM directory_sessions WHERE game_id=?");cap.bind(1,user);cap.bind(2,game);(void)cap.row();
         if(cap.number(0)>=1024||cap.number(1)>=16)throw Error("LIMIT_EXCEEDED");
         for(const auto& member:members) {
@@ -140,7 +132,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         const bool more=rows.size()>static_cast<std::size_t>(limit);if(more)rows.erase(rows.end()-1);
         return Json{{"sessions",rows},{"start",start},{"more",more}};
     }
-    const auto id=sessionId(args);Transaction transaction(store_);
+    const auto id=sessionId(args);Store::Transaction transaction(store_);
     Statement session(store_.db(),"SELECT host_id,host_machine,state,allow_join,revision,max_gamers,private_slots,kind FROM directory_sessions WHERE id=? AND game_id=?");session.bind(1,id);session.bind(2,game);
     if(!session.row())throw Error("NOT_FOUND");
     if(op=="sessions.join"||op=="sessions.joinInvited") {

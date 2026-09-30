@@ -102,13 +102,11 @@ Json Service::beginLeaderboardGame(const std::string& user,const std::string& ga
     if(!members.contains(user))throw Error("NOT_AUTHORIZED");
     Statement prune(store_.db(),"DELETE FROM leaderboard_games WHERE expires<?");prune.bind(1,timestamp);(void)prune.row();
     Statement cap(store_.db(),"SELECT COUNT(*) FROM leaderboard_games WHERE owner_id=? AND committed='' AND expires>?");cap.bind(1,user);cap.bind(2,timestamp);(void)cap.row();if(cap.number(0)>=16)throw Error("LIMIT_EXCEEDED");
-    const auto id=randomHex(16);store_.exec("BEGIN IMMEDIATE");
-    try {
-        Statement insert(store_.db(),"INSERT INTO leaderboard_games(id,game_id,owner_id,kind,created,expires) VALUES(?,?,?,'local',?,?)");
-        insert.bind(1,id);insert.bind(2,game);insert.bind(3,user);insert.bind(4,timestamp);insert.bind(5,timestamp+86400);(void)insert.row();
-        for(const auto& member:members){Statement join(store_.db(),"INSERT INTO leaderboard_game_members(gameplay_id,user_id) VALUES(?,?)");join.bind(1,id);join.bind(2,member);(void)join.row();}
-        store_.exec("COMMIT");
-    }catch(...){store_.exec("ROLLBACK");throw;}
+    const auto id=randomHex(16);Store::Transaction transaction(store_);
+    Statement insert(store_.db(),"INSERT INTO leaderboard_games(id,game_id,owner_id,kind,created,expires) VALUES(?,?,?,'local',?,?)");
+    insert.bind(1,id);insert.bind(2,game);insert.bind(3,user);insert.bind(4,timestamp);insert.bind(5,timestamp+86400);(void)insert.row();
+    for(const auto& member:members){Statement join(store_.db(),"INSERT INTO leaderboard_game_members(gameplay_id,user_id) VALUES(?,?)");join.bind(1,id);join.bind(2,member);(void)join.row();}
+    transaction.commit();
     return Json{{"gameplay",id}};
 }
 Json Service::abortLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
@@ -180,8 +178,8 @@ Json Service::commitLeaderboardGame(const std::string& user,const std::string& g
         Statement member(store_.db(),"SELECT 1 FROM leaderboard_game_members WHERE gameplay_id=? AND user_id=?");member.bind(1,gameplay);member.bind(2,target);if(!member.row())throw Error("NOT_AUTHORIZED");
         rows.push_back({target,key,entry["columns"].dump(),mode,rating,policy});
     }
-    store_.exec("BEGIN IMMEDIATE");
-    try {
+    {
+        Store::Transaction transaction(store_);
         const auto timestamp=now();
         for(const auto& row:rows)writeEntry(store_.db(),game,row.key,row.mode,row.user,row.rating,row.columns,row.policy,timestamp);
         if(!round.empty()) {
@@ -194,8 +192,9 @@ Json Service::commitLeaderboardGame(const std::string& user,const std::string& g
             }
             Statement touch(store_.db(),"UPDATE arbitration_rounds SET updated=? WHERE id=?");touch.bind(1,timestamp);touch.bind(2,round);(void)touch.row();
         }
-        Statement close(store_.db(),"UPDATE leaderboard_games SET committed=? WHERE id=?");close.bind(1,digest);close.bind(2,gameplay);(void)close.row();store_.exec("COMMIT");
-    }catch(...){store_.exec("ROLLBACK");throw;}
+        Statement close(store_.db(),"UPDATE leaderboard_games SET committed=? WHERE id=?");close.bind(1,digest);close.bind(2,gameplay);(void)close.row();
+        transaction.commit();
+    }
     resolveArbitration(game,round);
     return Json::object();
 }
@@ -207,8 +206,8 @@ void Service::resolveArbitration(const std::string& game,const std::string& roun
     ready.bind(1,game);ready.bind(2,round);ready.bind(3,timestamp-60);ready.bind(4,timestamp-86400);
     while(ready.row())due.push_back(ready.text(0));
     for(const auto& id:due) {
-        store_.exec("BEGIN IMMEDIATE");
         try {
+            Store::Transaction transaction(store_);
             std::vector<Json> reports;
             Statement submissions(store_.db(),"SELECT entries FROM arbitration_submissions WHERE round_id=?");submissions.bind(1,id);
             while(submissions.row())reports.push_back(Json::parse(submissions.text(0)));
@@ -229,8 +228,8 @@ void Service::resolveArbitration(const std::string& game,const std::string& roun
                 }
             }
             Statement done(store_.db(),"UPDATE arbitration_rounds SET resolved=1,updated=? WHERE id=?");done.bind(1,timestamp);done.bind(2,id);(void)done.row();
-            store_.exec("COMMIT");
-        }catch(...){store_.exec("ROLLBACK");}
+            transaction.commit();
+        }catch(...){}
     }
     Statement prune(store_.db(),"DELETE FROM arbitration_rounds WHERE resolved=1 AND updated<?");prune.bind(1,timestamp-86400);(void)prune.row();
 }

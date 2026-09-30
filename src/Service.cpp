@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <openssl/crypto.h>
 #include <cmath>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -28,6 +29,9 @@ constexpr long long MaxTitleRequestIds=1000000;
 // Recorded request IDs per account, title and 24-hour window, so that no one account can spend
 // the title's budget for everyone else.
 constexpr int MaxAccountRequestIds=20000;
+// The largest result kept for answering a repeat; a larger one is refused as a duplicate. Every
+// result of a recorded operation is far smaller (a session snapshot of 31 gamers is about 6 KiB).
+constexpr std::size_t MaxStoredResultBytes=16384;
 class DurableScope {
 public:
     DurableScope(Store& store,bool durable):store_(durable?&store:nullptr) {if(store_)store_->exec("PRAGMA synchronous=FULL");}
@@ -38,6 +42,9 @@ private:
     Store* store_;
 };
 }
+Service::FaultHook Service::faultHook_=nullptr;
+void Service::setFaultHookForTesting(FaultHook hook) {faultHook_=hook;}
+void Service::fault(const char* point) {if(faultHook_)faultHook_(point);}
 Service::Service(const std::string& database):store_(database) {store_.exec("PRAGMA synchronous=NORMAL");}
 std::string Service::handle(std::string_view bytes,std::string_view peer) {
     std::string id,code="OK",result;
@@ -61,6 +68,7 @@ void Service::setHintSink(std::function<void(const std::string& user,const std::
     std::lock_guard lock(mutex_);hintSink_=std::move(sink);
 }
 void Service::hint(const std::string& user,const char* topic) {
+    fault("hint");
     if(hints_.size()<256&&std::find(hints_.begin(),hints_.end(),std::pair<std::string,std::string>{user,topic})==hints_.end())
         hints_.emplace_back(user,topic);
 }
@@ -142,7 +150,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     const auto& a=r["args"];
     static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","invites.joinFriend","parties.get","parties.invite","parties.accept","parties.decline","parties.leave","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack"};
     if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay"})},{"maxMessageBytes",MaxMessageBytes}};
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id,minimum_version FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     // A title may stop accepting old game versions (XNA GameUpdateRequiredException); a client that
@@ -168,62 +176,116 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
         if (loginRates_.size()>=4096 && !loginRates_.contains(peer)) throw Error("RATE_LIMITED");
         auto& rate=loginRates_[peer];if (rate.count++>=10) throw Error("RATE_LIMITED");if (!rate.start) rate.start=timestamp;
     }
-    // The request's own bookkeeping is one write transaction.
-    store_.exec("BEGIN IMMEDIATE");
-    try {
-        if (!token.empty()) {
-            // Friends see a member online for 90 s after the last request. Fifteen seconds of slack
-            // spares a write on nearly every request; the 30 s heartbeat always refreshes it.
-            Statement seen(store_.db(),"UPDATE sessions SET last_seen=?1 WHERE hash=?2 AND last_seen<?1-15");
-            seen.bind(1,timestamp);seen.bind(2,sha256(token));(void)seen.row();
-        }
-        const bool recorded=!Unrecorded.contains(op);
-        if (recorded) {
-            if (timestamp-lastTrim_>=60) {
-                Statement trim(store_.db(),"DELETE FROM request_ids WHERE created<?");trim.bind(1,timestamp-86400);(void)trim.row();
-                lastTrim_=timestamp;requestIdCounts_.clear();
-                std::erase_if(requestBudgets_,[&](const auto& entry){return timestamp-entry.second.start>=86400;});
-            }
-            // Counted once per title and minute, then kept in memory, instead of on every request.
-            auto counted=requestIdCounts_.find(game);
-            if (counted==requestIdCounts_.end()) {
-                Statement count(store_.db(),"SELECT COUNT(*) FROM request_ids WHERE game_id=?");count.bind(1,game);(void)count.row();
-                counted=requestIdCounts_.emplace(game,count.number(0)).first;
-            }
-            if (counted->second>=MaxTitleRequestIds) throw Error("LIMIT_EXCEEDED");
-            if (!user.empty()) {
-                auto& budget=requestBudgets_[game+'\n'+user];
-                if (timestamp-budget.start>=86400) budget={timestamp,0};
-                if (budget.count>=MaxAccountRequestIds) throw Error("RATE_LIMITED");
-            }
-            try { Statement nonce(store_.db(),"INSERT INTO request_ids(game_id,id,created) VALUES(?,?,?)");nonce.bind(1,game);nonce.bind(2,id);nonce.bind(3,timestamp);(void)nonce.row(); }
-            catch (const Error& e) { if (e.code()=="CONFLICT") throw Error("DUPLICATE_REQUEST");throw; }
-        }
-        store_.exec("COMMIT");
-        if (recorded) {
-            ++requestIdCounts_[game];
-            if (!user.empty()) ++requestBudgets_[game+'\n'+user].count;
-        }
-    } catch (...) { try{store_.exec("ROLLBACK");}catch(...){} throw; }
-    const DurableScope durable(store_,!Ephemeral.contains(op));
+    bool signedIn=false;
     if (op=="auth.login") {
         const auto username=stringField(a,"username",64),password=stringField(a,"password",256);
-        if (!identifier(username)||password.size()<8) throw Error("AUTHENTICATION_FAILED");
-        std::string salt="00000000000000000000000000000000",expected(64,'0');bool found=false;
-        {
-            Statement s(store_.db(),"SELECT id,salt,verifier FROM users WHERE username=?");s.bind(1,username);
-            if((found=s.row())) {user=s.text(0);salt=s.text(1);expected=s.text(2);}
+        if (identifier(username)&&password.size()>=8) {
+            std::string salt="00000000000000000000000000000000",expected(64,'0'),account;bool found=false;
+            {
+                Statement s(store_.db(),"SELECT id,salt,verifier FROM users WHERE username=?");s.bind(1,username);
+                if((found=s.row())) {account=s.text(0);salt=s.text(1);expected=s.text(2);}
+            }
+            // The scrypt derivation, tens of milliseconds by design, runs without the lock so other
+            // players' requests keep flowing; no transaction is open on the shared connection here.
+            lock.unlock();
+            std::string computed;
+            try {computed=passwordHash(password,salt);} catch(...) {lock.lock();throw;}
+            lock.lock();
+            signedIn=found&&expected.size()==computed.size()&&CRYPTO_memcmp(expected.data(),computed.data(),computed.size())==0;
+            if(signedIn)user=account;
         }
-        // The rate limit and request ID above were decided under the lock; the scrypt derivation,
-        // tens of milliseconds by design, runs without it so other players' requests keep flowing.
-        store_.exec("PRAGMA synchronous=NORMAL");lock.unlock();
-        std::string computed;
-        try {computed=passwordHash(password,salt);} catch(...) {lock.lock();throw;}
-        lock.lock();store_.exec("PRAGMA synchronous=FULL");
-        if (!found || expected.size()!=computed.size() || CRYPTO_memcmp(expected.data(),computed.data(),computed.size())!=0)
-            throw Error("AUTHENTICATION_FAILED");
-        return issueCredentials(user,game);
     }
+    const bool recorded=!Unrecorded.contains(op);
+    // Whose request ID this is: the authenticated caller; nobody yet for a sign-in or refresh.
+    const auto owner=token.empty()?std::string{}:user;
+    // Settled before the transaction: SQLite refuses to change the sync level inside one.
+    const DurableScope durable(store_,!Ephemeral.contains(op));
+    // The request ID, the change it makes and its outcome commit together or not at all: a crash
+    // before the commit leaves the ID unused, so the client's retry runs the request; a crash
+    // after it leaves the outcome, so the retry is answered from the record.
+    Store::Transaction transaction(store_);
+    if (!token.empty()) {
+        // Friends see a member online for 90 s after the last request. Fifteen seconds of slack
+        // spares a write on nearly every request; the 30 s heartbeat always refreshes it.
+        Statement seen(store_.db(),"UPDATE sessions SET last_seen=?1 WHERE hash=?2 AND last_seen<?1-15");
+        seen.bind(1,timestamp);seen.bind(2,sha256(token));(void)seen.row();
+    }
+    if (recorded) {
+        if (timestamp-lastTrim_>=60) {
+            Statement trim(store_.db(),"DELETE FROM request_ids WHERE created<?");trim.bind(1,timestamp-86400);(void)trim.row();
+            lastTrim_=timestamp;requestIdCounts_.clear();
+            std::erase_if(requestBudgets_,[&](const auto& entry){return timestamp-entry.second.start>=86400;});
+        }
+        // Counted once per title and minute, then kept in memory, instead of on every request.
+        auto counted=requestIdCounts_.find(game);
+        if (counted==requestIdCounts_.end()) {
+            Statement count(store_.db(),"SELECT COUNT(*) FROM request_ids WHERE game_id=?");count.bind(1,game);(void)count.row();
+            counted=requestIdCounts_.emplace(game,count.number(0)).first;
+        }
+        fault("before-record");
+        std::optional<std::string> outcome,stored;bool replayable=false;
+        {
+            Statement previous(store_.db(),"SELECT user_id,op,outcome,result FROM request_ids WHERE game_id=? AND id=?");
+            previous.bind(1,game);previous.bind(2,id);
+            if (previous.row()) {
+                // A repeat is answered from the record when the same account repeats the same
+                // operation and its outcome was kept; anything else is a reused ID.
+                outcome=previous.text(2);
+                if(!previous.null(3))stored=previous.text(3);
+                replayable=previous.text(1)==op&&previous.text(0)==owner&&!outcome->empty()&&(*outcome!="OK"||stored);
+            }
+        }
+        if (outcome) {
+            if (!replayable) throw Error("DUPLICATE_REQUEST");
+            transaction.commit();
+            if (*outcome!="OK") throw Error(*outcome);
+            return parse(*stored);
+        }
+        if (counted->second>=MaxTitleRequestIds) throw Error("LIMIT_EXCEEDED");
+        if (!owner.empty()) {
+            auto& budget=requestBudgets_[game+'\n'+owner];
+            if (timestamp-budget.start>=86400) budget={timestamp,0};
+            if (budget.count>=MaxAccountRequestIds) throw Error("RATE_LIMITED");
+        }
+        Statement nonce(store_.db(),"INSERT INTO request_ids(game_id,id,created) VALUES(?,?,?)");nonce.bind(1,game);nonce.bind(2,id);nonce.bind(3,timestamp);(void)nonce.row();
+        fault("after-record");
+    }
+    Json result;std::string outcome="OK";
+    try {
+        if (op=="auth.login") {
+            if (!signedIn) throw Error("AUTHENTICATION_FAILED");
+            result=issueCredentials(user,game);
+        } else result=execute(op,game,user,r,a,timestamp);
+        // A response that cannot be sent is an outcome too; it is what a repeat will hear.
+        if (result.dump().size()+256>MaxMessageBytes) throw Error("LIMIT_EXCEEDED");
+    } catch (const Error& e) {
+        // A refusal is the request's outcome and commits with whatever the request did before it
+        // (a replayed refresh credential revokes its family, then refuses). An internal failure
+        // rolls everything back, the ID included, so a retry runs it again.
+        if (e.code()=="INTERNAL_ERROR") throw;
+        outcome=e.code();
+    }
+    fault("before-commit");
+    if (recorded) {
+        // Results that carry a secret (access and refresh tokens, relay tickets) are never stored;
+        // a repeat of those is refused as before.
+        static const std::set<std::string> Secret{"auth.login","auth.refresh","sessions.relayTicket"};
+        const auto stored=outcome=="OK"&&!Secret.contains(op)?result.dump():std::string{};
+        Statement keep(store_.db(),"UPDATE request_ids SET user_id=?,op=?,outcome=?,result=? WHERE game_id=? AND id=?");
+        keep.bind(1,owner);keep.bind(2,op);keep.bind(3,outcome);
+        if(stored.empty()||stored.size()>MaxStoredResultBytes)keep.bindNull(4);else keep.bind(4,stored);
+        keep.bind(5,game);keep.bind(6,id);(void)keep.row();
+    }
+    transaction.commit();
+    fault("after-commit");
+    if (recorded) {
+        ++requestIdCounts_[game];
+        if (!owner.empty()) ++requestBudgets_[game+'\n'+owner].count;
+    }
+    if (outcome!="OK") throw Error(outcome);
+    return result;
+}
+Json Service::execute(const std::string& op,const std::string& game,const std::string& user,const Json& r,const Json& a,long long timestamp) {
     if(op=="auth.refresh")return refreshCredentials(game,a);
     if(op=="auth.ping")return Json{{"serverTime",timestamp}};
     if (op=="auth.logout") {
@@ -358,15 +420,13 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
             if(inbox.number(0)>=100)throw Error("LIMIT_EXCEEDED");
             recipients.push_back(target.text(0));
         }
-        store_.exec("BEGIN IMMEDIATE");
-        try {
-            for(const auto& recipient:recipients) {
-                Statement insert(store_.db(),"INSERT INTO messages(id,sender_id,recipient_id,text,created) VALUES(?,?,?,?,?)");
-                insert.bind(1,randomHex(16));insert.bind(2,user);insert.bind(3,recipient);insert.bind(4,text);insert.bind(5,timestamp);(void)insert.row();
-                hint(recipient,"messages");
-            }
-            store_.exec("COMMIT");
-        }catch(...){store_.exec("ROLLBACK");throw;}
+        Store::Transaction transaction(store_);
+        for(const auto& recipient:recipients) {
+            Statement insert(store_.db(),"INSERT INTO messages(id,sender_id,recipient_id,text,created) VALUES(?,?,?,?,?)");
+            insert.bind(1,randomHex(16));insert.bind(2,user);insert.bind(3,recipient);insert.bind(4,text);insert.bind(5,timestamp);(void)insert.row();
+            hint(recipient,"messages");
+        }
+        transaction.commit();
         return Json{{"sent",recipients.size()}};
     }
     if(op=="messages.list") {

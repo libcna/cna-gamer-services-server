@@ -24,6 +24,7 @@
 #include "SessionRemovalMigration.hpp"
 #include "TitleVersionMigration.hpp"
 #include "PartyMigration.hpp"
+#include "RequestOutcomeMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -93,6 +94,10 @@ std::string Statement::text(int index) const {
     return text ? std::string(reinterpret_cast<const char*>(text),static_cast<std::size_t>(sqlite3_column_bytes(statement_,index))) : "";
 }
 long long Statement::number(int index) const { return sqlite3_column_int64(statement_,index); }
+bool Statement::null(int index) const { return sqlite3_column_type(statement_,index)==SQLITE_NULL; }
+void Statement::bindNull(int index) {
+    if (sqlite3_bind_null(statement_,index)!=SQLITE_OK) throw Error("INTERNAL_ERROR");
+}
 Store::Store(const std::string& path) {
     if (sqlite3_open_v2(path.c_str(),&db_,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX,nullptr)!=SQLITE_OK) {
         sqlite3_close(db_); db_=nullptr; throw Error("INTERNAL_ERROR");
@@ -131,6 +136,7 @@ Store::Store(const std::string& path) {
         if(current<18){exec("BEGIN IMMEDIATE");exec(GamerZoneMigration);exec("COMMIT");}
         if(current<19){exec("BEGIN IMMEDIATE");exec(TitleVersionMigration);exec("COMMIT");}
         if(current<20){exec("BEGIN IMMEDIATE");exec(PartyMigration);exec("COMMIT");}
+        if(current<21){exec("BEGIN IMMEDIATE");exec(RequestOutcomeMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }
@@ -162,6 +168,29 @@ void Store::gameDefaults(const std::string& username,const Json& value) {
 sqlite3* Store::db() const { return db_; }
 void Store::exec(const char* sql) {
     if (sqlite3_exec(db_,sql,nullptr,nullptr,nullptr)!=SQLITE_OK) throw Error("INTERNAL_ERROR");
+}
+Store::Transaction::Transaction(Store& store):store_(store),level_(store.depth_) {
+    const auto savepoint="SAVEPOINT s"+std::to_string(level_);
+    store_.exec(level_==0?"BEGIN IMMEDIATE":savepoint.c_str());
+    ++store_.depth_;
+}
+Store::Transaction::~Transaction() {
+    if(!open_)return;
+    --store_.depth_;
+    try {
+        if(level_==0) {
+            // SQLite may already have rolled back after an I/O error; ROLLBACK would then fail.
+            if(!sqlite3_get_autocommit(store_.db_))store_.exec("ROLLBACK");
+        } else {
+            const auto name="s"+std::to_string(level_);
+            store_.exec(("ROLLBACK TO "+name).c_str());store_.exec(("RELEASE "+name).c_str());
+        }
+    } catch(...) {}
+}
+void Store::Transaction::commit() {
+    const auto release="RELEASE s"+std::to_string(level_);
+    store_.exec(level_==0?"COMMIT":release.c_str());
+    open_=false;--store_.depth_;
 }
 void Store::title(const std::string& id,const std::string& name) {
     if (!identifier(id) || name.empty() || name.size()>128) throw Error("INVALID_ARGUMENT");
@@ -208,12 +237,11 @@ std::string Store::asset(const std::string& game,const std::string& mime,std::st
         if(integer(4)!=2||integer(8)!=bytes.size())throw Error("INVALID_ARGUMENT");
     }
     const auto hash=sha256(bytes);
-    exec("BEGIN IMMEDIATE");
-    try {
-        Statement insert(db_,"INSERT OR IGNORE INTO assets(hash,mime,size,bytes) VALUES(?,?,?,?)");
-        insert.bind(1,hash);insert.bind(2,mime);insert.bind(3,static_cast<long long>(bytes.size()));insert.blob(4,bytes);(void)insert.row();
-        Statement title(db_,"INSERT OR IGNORE INTO title_assets(game_id,hash) VALUES(?,?)");title.bind(1,game);title.bind(2,hash);(void)title.row();exec("COMMIT");
-    }catch(...){exec("ROLLBACK");throw;}
+    Transaction transaction(*this);
+    Statement insert(db_,"INSERT OR IGNORE INTO assets(hash,mime,size,bytes) VALUES(?,?,?,?)");
+    insert.bind(1,hash);insert.bind(2,mime);insert.bind(3,static_cast<long long>(bytes.size()));insert.blob(4,bytes);(void)insert.row();
+    Statement title(db_,"INSERT OR IGNORE INTO title_assets(game_id,hash) VALUES(?,?)");title.bind(1,game);title.bind(2,hash);(void)title.row();
+    transaction.commit();
     return hash;
 }
 void Store::picture(const std::string& username,const std::string& hash) {

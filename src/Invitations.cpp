@@ -10,14 +10,6 @@ std::string opaqueId(const Json& args,const char* field) {
         throw Error("INVALID_ARGUMENT");
     return value;
 }
-class InvitationTransaction {
-public:
-    explicit InvitationTransaction(Store& store):store_(store){store_.exec("BEGIN IMMEDIATE");}
-    ~InvitationTransaction(){if(!committed_)try{store_.exec("ROLLBACK");}catch(...){}}
-    void commit(){store_.exec("COMMIT");committed_=true;}
-private:
-    Store& store_;bool committed_=false;
-};
 }
 Json Service::invitationSnapshot(const std::string& id) {
     Statement row(store_.db(),"SELECT i.id,i.session_id,i.sender_id,u.gamertag,i.status,i.created,i.expires,i.accepted_at,d.kind FROM session_invitations i JOIN users u ON u.id=i.sender_id JOIN directory_sessions d ON d.id=i.session_id WHERE i.id=?");
@@ -37,7 +29,7 @@ Json Service::invitations(const std::string& user,const std::string& game,const 
     if(!privilege.row()||!privilege.number(0))throw Error("NOT_AUTHORIZED");
     pruneDirectory();
     const auto timestamp=now();
-    InvitationTransaction transaction(store_);
+    Store::Transaction transaction(store_);
     Statement trim(store_.db(),"DELETE FROM session_invitations WHERE created<=?");trim.bind(1,timestamp-86400);(void)trim.row();
     if(op=="invites.send") {
         const auto session=opaqueId(args,"session"),gamertag=stringField(args,"gamertag",32);

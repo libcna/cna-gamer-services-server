@@ -48,6 +48,12 @@ public:
      * changed for it ("invitations", "messages", "friends" or "party"). Called outside the service
      * lock, on the request's worker thread. @param sink Receiver. */
     void setHintSink(std::function<void(const std::string& user,const std::string& topic)> sink);
+    /** @brief Called at named points of a request ("before-record", "after-record", "hint",
+     * "before-commit", "after-commit"). */
+    using FaultHook = void (*)(const char* point);
+    /** @brief For crash tests only: runs a hook, for instance one that ends the process, at each
+     * named point of every request. Never set by the server. @param hook Hook or nullptr. */
+    static void setFaultHookForTesting(FaultHook hook);
     /** @brief Authenticates an event channel. @param game Title. @param token Access token; never
      * logged. @return The account the live token belongs to; throws UNAUTHENTICATED otherwise. */
     std::string eventAccount(std::string_view game,std::string_view token);
@@ -59,6 +65,9 @@ private:
     bool validateRelayGrantLocked(const RelayGrant& grant,bool redeemed);
     void pruneRelayTickets();
     Json dispatch(const Json& request,const std::string& peer,std::unique_lock<std::mutex>& lock);
+    Json execute(const std::string& op,const std::string& game,const std::string& user,const Json& request,const Json& args,long long timestamp);
+    static void fault(const char* point);
+    static FaultHook faultHook_;
     Json identity(const std::string& id);
     Json readLeaderboard(const std::string& game,const Json& args);
     Json beginLeaderboardGame(const std::string& user,const std::string& game,const Json& args);

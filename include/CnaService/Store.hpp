@@ -21,6 +21,8 @@ public:
     void blob(int index, std::string_view value);
     /** @brief Binds an integer. @param index One-based index. @param value Value. */
     void bind(int index, long long value);
+    /** @brief Binds NULL. @param index One-based index. */
+    void bindNull(int index);
     /** @brief Advances. @return Whether a row exists. */
     bool row();
     /** @brief Reads text. @param index Zero-based column. @return Text. */
@@ -29,11 +31,13 @@ public:
     std::string blob(int index) const;
     /** @brief Reads an integer. @param index Zero-based column. @return Value. */
     long long number(int index) const;
+    /** @brief Tests for NULL. @param index Zero-based column. @return Whether the column is NULL. */
+    bool null(int index) const;
 private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 20;
+inline constexpr long long SchemaVersion = 21;
 /** @brief Checks game defaults (XNA GameDefaults): an object of at most the known keys, each with a
  * value of its kind. @param value Candidate. @throws Error INVALID_ARGUMENT otherwise. */
 void validateGameDefaults(const Json& value);
@@ -50,6 +54,24 @@ public:
     sqlite3* db() const;
     /** @brief Executes fixed trusted SQL. @param sql Fixed SQL. */
     void exec(const char* sql);
+    /** @brief One unit of work. The outermost is a BEGIN IMMEDIATE transaction; one opened inside
+     * another is a savepoint, so a helper keeps its own all-or-nothing rule inside the request's
+     * transaction. Rolls back unless committed. */
+    class Transaction {
+    public:
+        /** @brief Begins. @param store Store. */
+        explicit Transaction(Store& store);
+        /** @brief Rolls back unless committed. */
+        ~Transaction();
+        Transaction(const Transaction&) = delete;
+        Transaction& operator=(const Transaction&) = delete;
+        /** @brief Commits (the outermost) or releases (a savepoint). */
+        void commit();
+    private:
+        Store& store_;
+        int level_;
+        bool open_ = true;
+    };
     /** @brief Provisions a title. @param id Stable title ID. @param name Display name. */
     void title(const std::string& id, const std::string& name);
     /** @brief Sets the oldest game version a title accepts (empty: any). @param id Title. @param version Dotted version. */
@@ -73,6 +95,7 @@ public:
     void seedLeaderboard(const std::string& game,const Json& entry);
 private:
     sqlite3* db_ = nullptr;
+    int depth_ = 0;
 };
 /** @brief Validates typed, bounded board columns against a provisioned schema.
  * @param columns Typed data. @param schema Column type map. */

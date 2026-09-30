@@ -4,12 +4,10 @@
 
 namespace CnaService {
 void Service::revokeFamily(const std::string& family) {
-    store_.exec("BEGIN IMMEDIATE");
-    try {
-        Statement mark(store_.db(),"UPDATE refresh_families SET revoked=1 WHERE id=?");mark.bind(1,family);(void)mark.row();
-        Statement remove(store_.db(),"DELETE FROM sessions WHERE refresh_family=?");remove.bind(1,family);(void)remove.row();
-        store_.exec("COMMIT");
-    }catch(...){store_.exec("ROLLBACK");throw;}
+    Store::Transaction transaction(store_);
+    Statement mark(store_.db(),"UPDATE refresh_families SET revoked=1 WHERE id=?");mark.bind(1,family);(void)mark.row();
+    Statement remove(store_.db(),"DELETE FROM sessions WHERE refresh_family=?");remove.bind(1,family);(void)remove.row();
+    transaction.commit();
 }
 Json Service::issueCredentials(const std::string& user,const std::string& game,const std::string& existingFamily) {
     const auto timestamp=now();auto family=existingFamily;auto refreshExpires=timestamp+30LL*86400;
@@ -37,8 +35,8 @@ Json Service::issueCredentials(const std::string& user,const std::string& game,c
         refreshExpires=scope.number(0);
     }
     const auto token=randomHex(32),refresh=randomHex(32);const auto expires=std::min(timestamp+3600,refreshExpires);
-    store_.exec("BEGIN IMMEDIATE");
-    try {
+    {
+        Store::Transaction transaction(store_);
         if(existingFamily.empty()) {
             Statement create(store_.db(),"INSERT INTO refresh_families(id,user_id,game_id,expires) VALUES(?,?,?,?)");create.bind(1,family);create.bind(2,user);create.bind(3,game);create.bind(4,refreshExpires);(void)create.row();
         }else {
@@ -48,8 +46,8 @@ Json Service::issueCredentials(const std::string& user,const std::string& game,c
         }
         Statement access(store_.db(),"INSERT INTO sessions(hash,user_id,game_id,expires,last_seen,refresh_family) VALUES(?,?,?,?,?,?)");access.bind(1,sha256(token));access.bind(2,user);access.bind(3,game);access.bind(4,expires);access.bind(5,timestamp);access.bind(6,family);(void)access.row();
         Statement credential(store_.db(),"INSERT INTO refresh_credentials(hash,family_id) VALUES(?,?)");credential.bind(1,sha256(refresh));credential.bind(2,family);(void)credential.row();
-        store_.exec("COMMIT");
-    }catch(...){store_.exec("ROLLBACK");throw;}
+        transaction.commit();
+    }
     return Json{{"identity",identity(user)},{"serverTime",timestamp},{"token",token},{"expires",expires},{"refreshToken",refresh},{"refreshExpires",refreshExpires}};
 }
 Json Service::refreshCredentials(const std::string& game,const Json& args) {

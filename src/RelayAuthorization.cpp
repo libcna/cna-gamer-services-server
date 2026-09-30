@@ -10,14 +10,6 @@ constexpr int RelayLossGraceSeconds=20;
 bool hexId(const std::string& value,std::size_t size) {
     return value.size()==size&&value.find_first_not_of("0123456789abcdef")==std::string::npos;
 }
-class RelayTransaction {
-public:
-    explicit RelayTransaction(Store& store):store_(store){store_.exec("BEGIN IMMEDIATE");}
-    ~RelayTransaction(){if(!committed_)try{store_.exec("ROLLBACK");}catch(...){}}
-    void commit(){store_.exec("COMMIT");committed_=true;}
-private:
-    Store& store_;bool committed_=false;
-};
 }
 void Service::pruneRelayTickets() {
     Statement remove(store_.db(),"DELETE FROM relay_tickets WHERE (used=0 AND expires<=?) OR grant_expires<=?");
@@ -45,7 +37,7 @@ Json Service::issueRelayTicket(const std::string& user,const std::string& game,c
         if(!family.row())throw Error("NOT_AUTHORIZED");
         authority.push_back({family.text(0),family.text(1)});deadline=std::min(deadline,family.number(2));
     }
-    RelayTransaction transaction(store_);
+    Store::Transaction transaction(store_);
     Statement count(store_.db(),"SELECT COUNT(*) FROM relay_tickets WHERE machine_id=?");count.bind(1,machine);(void)count.row();
     if(count.number(0)>=MaxMachineRelayTickets)throw Error("LIMIT_EXCEEDED");
     Statement titleCount(store_.db(),"SELECT COUNT(*) FROM relay_tickets WHERE game_id=?");titleCount.bind(1,game);(void)titleCount.row();
@@ -80,7 +72,7 @@ bool Service::validateRelayGrantLocked(const RelayGrant& grant,bool redeemed) {
 }
 RelayGrant Service::redeemRelayTicket(const std::string& game,const std::string& ticket) {
     if(!identifier(game)||!hexId(ticket,64))throw Error("UNAUTHENTICATED");
-    std::lock_guard lock(mutex_);pruneDirectory();pruneRelayTickets();RelayTransaction transaction(store_);
+    std::lock_guard lock(mutex_);pruneDirectory();pruneRelayTickets();Store::Transaction transaction(store_);
     const auto hash=sha256(ticket);Statement current(store_.db(),"SELECT session_id,machine_id,owner_id FROM relay_tickets WHERE hash=? AND game_id=?");
     current.bind(1,hash);current.bind(2,game);if(!current.row())throw Error("UNAUTHENTICATED");
     RelayGrant grant{hash,game,current.text(0),current.text(1),current.text(2)};
