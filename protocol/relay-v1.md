@@ -12,9 +12,10 @@ Control remains verified HTTPS POST `/cna/v1`: accounts, directory membership, h
 invitations and ticket issuance. Realtime relay uses a separate verified WSS upgrade endpoint
 `/cna/relay/v1`. It forwards ENet UDP datagrams, never XNA objects or REST gameplay payloads.
 Tickets/credentials must remain inside TLS messages, never URLs/logs. The client uses a private
-loopback UDP bridge with a route for each service-authorized machine; relay is mandatory first,
-and direct-peer connectivity is a later optimization. IP/port discovery is not NAT traversal.
-WSS/TCP head-of-line latency is an explicit first transport tradeoff, not Xbox networking parity.
+loopback UDP bridge with a route for each service-authorized machine. Every datagram goes through
+the relay: there is no direct peer path and no NAT traversal (IP/port discovery is not NAT
+traversal). WSS/TCP head-of-line latency is the accepted tradeoff, not Xbox networking parity. The
+datagrams are opaque to the server: CNA's game data and its NetworkSession voice frames alike.
 
 ## Binary datagram message
 
@@ -91,12 +92,13 @@ Application write queues hold <=64 complete frames/263,680 bytes, including the 
 Capacity is reserved before posting across strands; at most one wake/overflow notification is
 pending. Overflow closes the slow recipient. Each accepted socket has its own Asio strand, one
 reader and one serialized writer. Pending writes own their buffers until completion/cancellation.
-These explicit prototype caps are not an unbounded production cluster/scaling claim.
+These are fixed per-process caps; the relay hub lives in one server process and does not scale
+across machines (README, "One process").
 
 Canonical handshake examples accompany binary golden vectors. Queue/rate/session/title routing
 unit tests cover resource boundaries and concurrent producers. Verified-WSS independent-client tests
-cover secure forwarding and failure semantics. Genuine multi-process CNA ENet under relay-only
-isolation/firewall restrictions is still required before an Internet multiplayer claim.
+cover secure forwarding and failure semantics. Multi-process CNA ENet under relay-only NAT
+isolation is tested (below); public Internet deployment, latency and failover are not qualified.
 
 ## Ticket and connection authority (implemented GS-008a2)
 

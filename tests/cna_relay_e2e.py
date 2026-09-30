@@ -119,12 +119,12 @@ def main():
                 else:
                     stop(server);server=None;send(host,"continue\n");send(join,"continue\n");done(host);done(join)
             if owned:
-                print("Verified private owned online-operation/session engine: TLS/WSS authority, exact ENet establishment, both local account slots, group departure on secondary revocation, single safe failure, owner-bound observations and lease cleanup. Public NetworkSession adapter, reconnect and public Internet deployment remain unfinished.")
+                print("Verified private owned online-operation/session engine: TLS/WSS authority, exact ENet establishment, both local account slots, group departure on secondary revocation, single safe failure, owner-bound observations and lease cleanup. The public NetworkSession and reconnection are covered by service_cna_session*; public Internet deployment is not qualified.")
             if isolated:
                 assert len(namespace_ids)==4,"two separate NAT clients per category"
-                print("Verified NAT-isolated CNA libcurl WSS/ENet relay: separate rootless namespaces/NAT helpers, identical private addresses, no inbound mappings, two categories/titles, four identities, fragmented/unreliable game data, revocation and server failure. Raw mode separately tests UDP/malformed-packet guards. Public online NetworkSession, reconnect and public Internet deployment remain unfinished.")
+                print("Verified NAT-isolated CNA libcurl WSS/ENet relay: separate rootless namespaces/NAT helpers, identical private addresses, no inbound mappings, two categories/titles, four identities, fragmented/unreliable game data, revocation and server failure. Raw mode separately tests UDP/malformed-packet guards. The public NetworkSession and reconnection are covered by service_cna_session*; public Internet deployment is not qualified.")
             else:
-                print("Verified CNA libcurl WSS/ENet relay: CA/hostname refusals, two categories/titles, four identities, source-preserving game data, multi-local revocation, owner channel isolation and server failure. Localhost only; public online NetworkSession/Internet isolation/reconnect unfinished.")
+                print("Verified CNA libcurl WSS/ENet relay: CA/hostname refusals, two categories/titles, four identities, source-preserving game data, multi-local revocation, owner channel isolation and server failure. Localhost only; NAT isolation is the _nat variant, the public NetworkSession is service_cna_session*.")
         finally:
             for process in children:
                 if process.poll() is None:process.kill();process.wait()

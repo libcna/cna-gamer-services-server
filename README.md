@@ -3,8 +3,9 @@
 An independent C++23 service for CNA, the C++ reimplementation of the XNA 4.0 programming model.
 It provides what XNA games reached through their online service: accounts and Guide sign-in, gamer
 profiles and pictures, friends and presence, achievements, leaderboards with Ranked arbitration,
-messages and player reviews, avatars, the online session directory with invitations and host
-migration, and the relay that carries online NetworkSession traffic.
+messages and player reviews, parties, avatars, the online session directory with invitations and
+host migration, an event channel that pushes change hints, and the relay that carries online
+NetworkSession traffic.
 
 **It is not Xbox LIVE compatible.** Protocol, accounts, assets and binaries are CNA's own; no Xbox
 LIVE wire format, service binary or proprietary asset is used or reproduced. Original code is MIT
@@ -31,14 +32,21 @@ is missing.
 | `session-directory`, `session-removal`, `host-migration`, `session-add-members`, `session-invitations`, `join-friend` | PlayerMatch and Ranked directory, `RemoveFromSession`, host migration, `AddLocalGamer`, persistent invitations, joining a friend's or party member's game |
 | `parties` | Account-level parties of up to 8 friends: invitations, members with presence and joinable games (XNA `PartySize`, `ShowParty`, `ShowPartySessions`, `SendPartyInvites`) |
 | `leaderboard-list`, `title-version` | The title's boards for the Guide's leaderboard page; a title's oldest accepted game version |
-| `relay-tickets`, `relay` | One-use tickets and the WSS relay for ENet datagrams |
+| `events` | The account event channel (WSS `/cna/v1/events`): hints `invitations`, `messages`, `friends`, `party`, sent after the request that changed something succeeded; clients re-read and keep polling as the fallback |
+| `relay-tickets`, `relay` | One-use tickets and the WSS relay for ENet datagrams (game data and NetworkSession voice alike) |
+
+Push is hints only: the session directory, presence, leaderboards and achievements are read, not
+pushed, and a lost hint costs one poll interval. Voice media is not a control-plane feature: the
+control protocol has no voice operation, and CNA's NetworkSession voice travels through the relay as
+ordinary ENet datagrams the server never inspects.
 
 Not provided: Xbox LIVE compatibility of any kind; account self-registration or password change
-over the wire (the administrator provisions accounts); server push (clients poll friends, inboxes
-and the directory); privacy and block settings; TrueSkill; time windows for the `...Recent`
-leaderboard keys; direct peer-to-peer connections (every online datagram goes through the relay);
-a store (Marketplace), PartnerToken, title update delivery, and voice. Linux is the tested server host;
-Windows and macOS builds are unvalidated.
+over the wire (the administrator provisions accounts; gamer pictures are set by the administrator,
+mottos and regions not at all); privacy and block settings; TrueSkill computation; time windows for
+the `...Recent` leaderboard keys; direct peer-to-peer connections (every online datagram goes
+through the relay); a store (Marketplace), PartnerToken and title update delivery. Linux is the
+tested server host; Windows and macOS builds are unvalidated. CNA's
+`docs/gamer-services-known-limitations.md` lists every limitation, client and server.
 
 ## Build and run
 
@@ -71,7 +79,7 @@ server and never prints a credential. Passwords and JSON documents come from std
 | `leaderboard <title>` / `seed-leaderboard <title>` | Defines a board / inserts a fixture row, JSON on stdin |
 | `asset <title> <mime> <file>` | Imports a PNG (<=512x512, <=512 KiB) or GLB (<=16 MiB); prints its hash |
 | `picture <username> <hash>` | Sets a gamer picture |
-| `avatar-catalog <directory>` | Imports and fully validates a CNA avatar catalog (`assets/avatars/v1`, `v2`) |
+| `avatar-catalog <directory>` | Imports and fully validates a CNA avatar catalog (`assets/avatars/v1`, `v2`, `v3`) |
 | `avatar <username> random [male\|female]`, `clear` or `set` | Gives an account an avatar (`set` reads the description hex from stdin) |
 | `game-defaults <username>` | Sets the account's XNA GameDefaults, JSON on stdin |
 | `inspect` / `inspect-online <title>` | Counts only: users, titles, sessions, earned; directory, invitations, relay records |
@@ -116,8 +124,10 @@ open control connections, attached relay machines and open event channels. `INTE
 full, a locked database); the response to the client never carries details. SIGINT and SIGTERM
 stop the server.
 
-**One process.** The service is one process with one SQLite writer and an in-memory relay hub. It
-does not scale across machines. A second server process on the same database refuses to start
+**One process.** The service is one process with one SQLite writer and in-memory hubs for relay
+channels and event channels. It does not scale across machines: a second node would need shared
+relay routing, event delivery between nodes and distributed session ownership, not only a shared
+database. A second server process on the same database refuses to start
 (`DATABASE_IN_USE`: the first holds an advisory lock on `<database>.lock` until it exits); the admin
 tool deliberately takes no lock and works beside a running server. Back up a running server with
 SQLite's online backup, which is consistent under WAL: `sqlite3 service.sqlite3 ".backup
@@ -200,7 +210,7 @@ derivation.
 | A TCP and TLS handshake per request | Fixed `dcca1b4` (server) and CNA's reused curl handle |
 | A 33rd sign-in within 30 days was refused, locking out players on clients without credential storage | Fixed `541679c`: the oldest family is signed out |
 | No operational output at all | Fixed `cb1d6e4`: per-minute statistics line |
-| One process, one SQLite writer, in-memory relay hub: no horizontal scaling | Retained |
+| One process, one SQLite writer, in-memory relay and event hubs: no horizontal scaling | Retained |
 | Floods from many addresses can still fill the 256 control connections; no handshake rate limit | Retained: needs a firewall or proxy in front |
 | The per-account request budget lives in memory and starts over when the server restarts | Retained |
 | A new TLS certificate needs a restart (clients and relays reconnect) | Retained |
@@ -251,7 +261,8 @@ ctest --test-dir build -R '_nat$|host_crash|add_gamer' --output-on-failure
 
 Tested with Debian slirp4netns 1.2.1 and libslirp 4.8.0 unpacked outside the repository; their
 licenses are in [THIRD_PARTY.md](THIRD_PARTY.md). This is NAT-isolation evidence on one Linux host,
-not a measurement of public Internet latency or failover.
+not a measurement of public Internet latency or failover: public deployment is documented (above)
+but has not been independently qualified between genuinely remote networks.
 
 ### Avatars
 

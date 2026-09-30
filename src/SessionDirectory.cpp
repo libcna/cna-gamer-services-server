@@ -28,8 +28,9 @@ private:
     Store& store_;bool committed_=false;
 };
 }
-// XNA host migration: the machine holding the lowest remaining ordinal becomes the host, its
-// owner the host account; the session's lease starts again from the handover.
+// XNA host migration. Which machine takes over is CNA policy (XNA shows only that the host changed):
+// the machine holding the lowest remaining ordinal, its owner the host account; the session's lease
+// starts again from the handover.
 bool Service::migrateDirectoryHost(const std::string& session,const std::string& departing) {
     Statement next(store_.db(),"SELECT m.machine_id,d.owner_id FROM directory_members m JOIN directory_machines d ON d.id=m.machine_id "
         "WHERE m.session_id=? AND m.machine_id!=? AND d.expires>? ORDER BY m.ordinal LIMIT 1");

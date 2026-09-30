@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Independent verified-WSS transport checks; not yet CNA/ENet Internet acceptance."""
+"""Independent verified-WSS transport checks with Python clients; CNA ENet over the relay is service_cna_*."""
 import asyncio, json, os, pathlib, socket, sqlite3, ssl, subprocess, sys, tempfile, time
 import websockets
 from websockets.frames import Frame, OP_TEXT
