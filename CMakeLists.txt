@@ -50,7 +50,7 @@ file(READ migrations/020_parties.sql CNA_PARTY_MIGRATION)
 configure_file(src/PartyMigration.hpp.in generated/PartyMigration.hpp @ONLY)
 file(READ migrations/021_request_outcomes.sql CNA_REQUEST_OUTCOME_MIGRATION)
 configure_file(src/RequestOutcomeMigration.hpp.in generated/RequestOutcomeMigration.hpp @ONLY)
-add_library(cna_service src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
+add_library(cna_service src/DatabaseLock.cpp src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
 target_include_directories(cna_service PUBLIC include protocol/include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(cna_service PUBLIC OpenSSL::Crypto SQLite::SQLite3 nlohmann_json::nlohmann_json)
 target_compile_options(cna_service PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -73,6 +73,12 @@ set_tests_properties(service_tls_e2e PROPERTIES TIMEOUT 120)
 # Concurrency benchmark (tests/service_benchmark.py); the smoke pass only checks it runs cleanly.
 add_test(NAME service_benchmark_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/service_benchmark.py ${CMAKE_CURRENT_BINARY_DIR} --smoke)
 set_tests_properties(service_benchmark_smoke PROPERTIES TIMEOUT 120)
+
+# One server process owns a database, on every host platform (also built by MinGW for Windows).
+add_executable(database_lock_tests tests/DatabaseLockTests.cpp)
+target_link_libraries(database_lock_tests PRIVATE cna_service)
+target_compile_options(database_lock_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_database_lock COMMAND database_lock_tests)
 
 # A request ID and its change commit together: crashes at every point of a request, then a retry.
 add_executable(atomicity_tests tests/AtomicityTests.cpp)

@@ -128,8 +128,11 @@ stop the server.
 channels and event channels. It does not scale across machines: a second node would need shared
 relay routing, event delivery between nodes and distributed session ownership, not only a shared
 database. A second server process on the same database refuses to start
-(`DATABASE_IN_USE`: the first holds an advisory lock on `<database>.lock` until it exits); the admin
-tool deliberately takes no lock and works beside a running server. Back up a running server with
+(`DATABASE_IN_USE`): the first holds an operating-system lock on `<database>.lock` -- `flock` on
+Linux and macOS, the file opened without sharing on Windows -- which the system releases when the
+process ends, crash included, so no stale lock is ever left behind (`tests/DatabaseLockTests.cpp`;
+measured on Linux, and the Windows code under Wine, not on Windows itself). The admin tool
+deliberately takes no lock and works beside a running server. Back up a running server with
 SQLite's online backup, which is consistent under WAL: `sqlite3 service.sqlite3 ".backup
 service-backup.sqlite3"`. One address may hold 32 control connections and open 600 new ones a
 minute (each costs a TLS handshake); put a firewall or proxy in front of the server against floods
