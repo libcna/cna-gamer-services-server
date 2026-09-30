@@ -78,6 +78,12 @@ set_tests_properties(service_tls_e2e PROPERTIES TIMEOUT 120)
 add_test(NAME service_benchmark_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/service_benchmark.py ${CMAKE_CURRENT_BINARY_DIR} --smoke)
 set_tests_properties(service_benchmark_smoke PROPERTIES TIMEOUT 120)
 
+# A Ranked game across a host crash, migration, departures, a restart and retries.
+add_executable(ranked_migration_tests tests/RankedMigrationTests.cpp)
+target_link_libraries(ranked_migration_tests PRIVATE cna_service)
+target_compile_options(ranked_migration_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_ranked_migration COMMAND ranked_migration_tests)
+
 # GamerPrivileges as account policy and block lists change what the service does.
 add_executable(privacy_tests tests/PrivacyTests.cpp)
 target_link_libraries(privacy_tests PRIVATE cna_service)

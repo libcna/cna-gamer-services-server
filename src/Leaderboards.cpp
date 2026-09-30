@@ -148,8 +148,11 @@ Json Service::commitLeaderboardGame(const std::string& user,const std::string& g
         const auto session=stringField(context,"session",32);
         if(session.size()!=32||session.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("INVALID_ARGUMENT");
         const auto revision=integerField(context,"revision",1,2147483647);
-        Statement found(store_.db(),"SELECT id,members FROM arbitration_rounds WHERE game_id=? AND session_id=? AND start_revision<=? AND (end_revision IS NULL OR end_revision>=?) ORDER BY start_revision DESC LIMIT 1");
-        found.bind(1,game);found.bind(2,session);found.bind(3,revision);found.bind(4,revision);
+        // The game a report is about is the latest round started at or before the revision the machine
+        // knows. Its end does not bound it: after EndGame the session moves on (a machine leaves, the
+        // host changes), and a machine reporting then still reports the game that just ended.
+        Statement found(store_.db(),"SELECT id,members FROM arbitration_rounds WHERE game_id=? AND session_id=? AND start_revision<=? ORDER BY start_revision DESC LIMIT 1");
+        found.bind(1,game);found.bind(2,session);found.bind(3,revision);
         if(!found.row())throw Error("NOT_FOUND");
         round=found.text(0);
         for(const auto& member:Json::parse(found.text(1))) {
