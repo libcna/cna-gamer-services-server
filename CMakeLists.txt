@@ -193,3 +193,8 @@ set_tests_properties(service_cna_session_host_crash PROPERTIES TIMEOUT 240 SKIP_
 # GSP-K2: XNA AddLocalGamer online -- the joiner adds its second gamer after joining.
 add_test(NAME service_cna_session_add_gamer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --add --isolated)
 set_tests_properties(service_cna_session_add_gamer PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+
+add_executable(picture_privacy_tests tests/PicturePrivacyTests.cpp)
+target_link_libraries(picture_privacy_tests PRIVATE cna_service)
+target_compile_options(picture_privacy_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_picture_privacy COMMAND picture_privacy_tests)

@@ -90,6 +90,7 @@ private:
     bool friendsWith(const std::string& a,const std::string& b);
     void mayCommunicate(const std::string& from,const std::string& to,bool friendRequest);
     void mayView(const std::string& viewer,const std::string& target);
+    bool mayReadAsset(const std::string& user,const std::string& game,const std::string& hash);
     Json privileges(const std::string& user);
     Json privacy(const std::string& user,const std::string& op,const Json& args);
 

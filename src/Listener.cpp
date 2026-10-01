@@ -151,7 +151,7 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Even
                 response.set(http::field::cache_control,"private, max-age=31536000, immutable");
                 response.body()=file.bytes;
             } else {
-                response.result(file.code=="UNAUTHENTICATED"?http::status::unauthorized:file.code=="NOT_FOUND"?http::status::not_found:
+                response.result(file.code=="UNAUTHENTICATED"?http::status::unauthorized:file.code=="NOT_AUTHORIZED"?http::status::forbidden:file.code=="NOT_FOUND"?http::status::not_found:
                     file.code=="RATE_LIMITED"?http::status::too_many_requests:file.code=="INVALID_ARGUMENT"?http::status::bad_request:
                     http::status::internal_server_error);
                 response.body()=CnaService::response("",file.code).dump();

@@ -33,6 +33,23 @@ void Service::mayView(const std::string& viewer,const std::string& target) {
     if(!setting.row()||setting.text(0)=="blocked")throw Error("NOT_AUTHORIZED");
     if(setting.text(0)=="friends"&&!friendsWith(viewer,target))throw Error("NOT_AUTHORIZED");
 }
+bool Service::mayReadAsset(const std::string& user,const std::string& game,const std::string& hash) {
+    Statement shared(store_.db(),"SELECT 1 FROM title_assets WHERE game_id=? AND hash=? UNION "
+        "SELECT 1 FROM avatar_catalog_assets WHERE hash=? LIMIT 1");
+    shared.bind(1,game);shared.bind(2,hash);shared.bind(3,hash);
+    if(shared.row())return true;
+    Statement owners(store_.db(),"SELECT id FROM users WHERE picture=?");owners.bind(1,hash);
+    bool picture=false;
+    while(owners.row()) {
+        picture=true;
+        try {mayView(user,owners.text(0));return true;}
+        catch(const Error& error) {if(error.code()!="NOT_AUTHORIZED")throw;}
+    }
+    // A hash shared by several accounts is readable through any viewable owner. Explicit title
+    // and catalog assets above remain public to that title, independent of profile restrictions.
+    if(picture)throw Error("NOT_AUTHORIZED");
+    return false;
+}
 Json Service::privileges(const std::string& user) {
     Statement s(store_.db(),"SELECT privilege_communication,privilege_profile_viewing,privilege_user_content,privilege_trade,"
         "privilege_purchase,privilege_premium FROM users WHERE id=?");

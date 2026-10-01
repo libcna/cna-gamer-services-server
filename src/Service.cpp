@@ -94,10 +94,8 @@ Service::File Service::file(std::string_view game,std::string_view token,std::st
         session.bind(1,sha256(token));session.bind(2,game);session.bind(3,timestamp);
         if(!session.row())throw Error("UNAUTHENTICATED");
         const auto user=session.text(0);
-        Statement authorized(store_.db(),"SELECT 1 FROM title_assets WHERE game_id=? AND hash=? UNION SELECT 1 FROM users WHERE picture=? "
-            "UNION SELECT 1 FROM avatar_catalog_assets WHERE hash=? LIMIT 1");
-        authorized.bind(1,game);authorized.bind(2,hash);authorized.bind(3,hash);authorized.bind(4,hash);
-        if(authorized.row()) {
+        const bool authorized=mayReadAsset(user,std::string(game),std::string(hash));
+        if(authorized) {
             Statement asset(store_.db(),"SELECT mime,bytes FROM assets WHERE hash=?");asset.bind(1,hash);
             if(!asset.row())throw Error("NOT_FOUND");
             out.mime=asset.text(0);out.bytes=asset.blob(1);
@@ -405,11 +403,7 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
         for(const auto* key:{"offset","length"})if(!a.contains(key)||!a[key].is_number_integer()||a[key]<0)throw Error("INVALID_ARGUMENT");
         const auto offset=a["offset"].get<long long>(),length=a["length"].get<long long>();
         if(offset>16777216||length<1||length>12288)throw Error("LIMIT_EXCEEDED");
-        // Title assets, account pictures and every imported avatar catalog file are readable.
-        Statement authorized(store_.db(),"SELECT 1 FROM title_assets WHERE game_id=? AND hash=? UNION SELECT 1 FROM users WHERE picture=? "
-            "UNION SELECT 1 FROM avatar_catalog_assets WHERE hash=? LIMIT 1");
-        authorized.bind(1,game);authorized.bind(2,hash);authorized.bind(3,hash);authorized.bind(4,hash);
-        if(!authorized.row())throw Error("NOT_FOUND");
+        if(!mayReadAsset(user,game,hash))throw Error("NOT_FOUND");
         Statement asset(store_.db(),"SELECT size,mime,substr(bytes,?,?) FROM assets WHERE hash=?");
         asset.bind(1,offset+1);asset.bind(2,length);asset.bind(3,hash);if(!asset.row())throw Error("NOT_FOUND");
         if(offset>=asset.number(0))throw Error("INVALID_ARGUMENT");
