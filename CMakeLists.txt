@@ -198,3 +198,8 @@ add_executable(picture_privacy_tests tests/PicturePrivacyTests.cpp)
 target_link_libraries(picture_privacy_tests PRIVATE cna_service)
 target_compile_options(picture_privacy_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME service_picture_privacy COMMAND picture_privacy_tests)
+
+add_executable(numeric_persistence_tests tests/NumericPersistenceTests.cpp)
+target_link_libraries(numeric_persistence_tests PRIVATE cna_service)
+target_compile_options(numeric_persistence_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_numeric_persistence COMMAND numeric_persistence_tests)

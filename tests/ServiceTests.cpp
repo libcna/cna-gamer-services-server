@@ -141,6 +141,11 @@ int main() {
             check(call(s,"two","assets.read",{{"hash",hash},{"offset",0},{"length",1}},other)["error"]=="NOT_FOUND","asset title ACL");
             check(call(s,"one","assets.read",{{"hash","../file"},{"offset",0},{"length",1}},alice)["error"]=="INVALID_ARGUMENT","no asset paths");
             check(call(s,"one","assets.read",{{"hash",hash},{"offset",12},{"length",1}},alice)["error"]=="INVALID_ARGUMENT","asset end offset");
+            for(const auto offset:{9007199254740993ULL,9223372036854775808ULL,18446744073709551615ULL}) {
+                const auto reply=call(s,"one","assets.read",{{"hash",hash},{"offset",offset},{"length",1}},alice);
+                std::cout<<"input offset="<<offset<<" error="<<reply["error"]<<'\n';
+                check(reply["error"]=="LIMIT_EXCEEDED"||reply["error"]=="INVALID_ARGUMENT","unsigned asset offset is refused before SQLite");
+            }
             check(call(s,"one","assets.read",{{"hash",hash},{"offset",0},{"length",12289}},alice)["error"]=="LIMIT_EXCEEDED","asset chunk cap");
             check(call(s,"one","assets.read",{{"hash",std::string(64,'0')},{"offset",0},{"length",1}},alice)["error"]=="NOT_FOUND","missing asset");
             check(call(s,"one","friends.add",{{"gamertag","Bob"}},alice)["error"]=="OK","friend add");
