@@ -130,9 +130,9 @@ def main():
                     stop(server);time.sleep(1);server,again=start();assert again==url,"same service authority"
                 proceed(host,join)
                 exchanged=both("session-exchanged ")
-                # Without an outage all six arrive; right after a restart the unreliable packet may be
-                # throttled by ENet, but all five reliable packets must still arrive.
-                allowed={"session-exchanged 6"} if not restart else {"session-exchanged 6","session-exchanged 5"}
+                # InOrder is unreliable even without an outage. The native harness independently
+                # requires all five reliable payloads, verifies identities/bytes and rejects duplicates.
+                allowed={"session-exchanged 6","session-exchanged 5"}
                 assert set(exchanged)<=allowed,"verified deliveries each way: "+str(exchanged)
                 proceed(host,join);both("session-playing");proceed(host,join);both("session-lobby")
                 if migrate or crash:
