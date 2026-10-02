@@ -134,6 +134,17 @@ int main() {
         check(error(s,"auth.ping",{{"voice",true}},token["carol"])=="OK"&&voiceOf("alice","Carol"),"Carol can talk");
         {Store store(path.string());store.privilege("carol","communication","blocked");}
         check(!voiceOf("alice","Carol"),"an account that may not communicate has no voice");
+        auto policy=call(s,"auth.ping",Json::object(),token["carol"]);
+        check(policy["result"].contains("privileges"),"heartbeat carries current policy");
+        check(policy["result"]["privileges"]["communication"]=="blocked","operator revocation reaches an existing credential");
+        check(error(s,"privacy.block",{{"gamertag","Dave"}},token["carol"])=="OK","another device blocks a speaker");
+        policy=call(s,"auth.ping",Json::object(),token["carol"]);
+        check(policy["result"]["blocked"]==Json::array({"Dave"}),"heartbeat carries changed block list");
+        check(error(s,"privacy.unblock",{{"gamertag","Dave"}},token["carol"])=="OK","unblock");
+        {Store store(path.string());store.privilege("carol","communication","everyone");}
+        policy=call(s,"auth.ping",Json::object(),token["carol"]);
+        check(policy["result"]["privileges"]["communication"]=="everyone"&&policy["result"]["blocked"].empty(),"heartbeat restores current policy");
+        check(error(s,"auth.ping",Json::object(),std::string(64,'0'))=="UNAUTHENTICATED","policy requires authentication");
         std::cout<<checks<<" privacy checks passed\n";
         return 0;
     } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}

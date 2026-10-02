@@ -100,6 +100,17 @@ refused and nothing is deleted to resolve it. Back up before upgrading the serve
 certificate needs a restart. Clients reconnect by themselves, and live online sessions resume their
 relay connections (tested by `service_cna_session_restart`).
 
+**Live communication policy.** Capability `policy-refresh` adds current `privileges` and the
+account's complete `blocked` list to authenticated `auth.ping` responses. Current CNA clients
+publish these snapshots into existing signed-in gamers on Dispatcher.Update (normally a 30-second
+heartbeat); local mute remains independent. Policy responses can contain up to 1024 block tags,
+while incoming request arrays retain their 256-item bound. Voice payloads remain opaque ENet relay
+traffic: the relay authorizes current session membership/credentials, and cooperative CNA clients
+apply communication policy before capture/playback. This is not server inspection of voice content
+or immediate packet-by-packet privacy revocation. During service outages clients retain their last
+known policy; a deployment requiring centrally enforced instant voice revocation needs a separate,
+explicit authority model.
+
 **Durability.** Commits use `synchronous=NORMAL`: crash-safe, but a power loss may roll back the
 last moments of leases, presence and request bookkeeping. Everything a player would notice losing
 (credentials and revocations, awards, scores, friends, messages, profile and avatar edits) commits
