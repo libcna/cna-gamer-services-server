@@ -209,3 +209,6 @@ target_include_directories(admission_tests PRIVATE src)
 target_link_libraries(admission_tests PRIVATE Threads::Threads)
 target_compile_options(admission_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME service_admission COMMAND admission_tests)
+
+add_test(NAME service_cache_authorization COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cache_authorization_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(service_cache_authorization PROPERTIES TIMEOUT 60)

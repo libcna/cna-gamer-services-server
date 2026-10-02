@@ -113,7 +113,6 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Even
             const auto file=co_await net::co_spawn(workers.requests,[&]()->net::awaitable<Service::File>{co_return service.file(game,token,path);},net::use_awaitable);
             if(file.code=="OK") {
                 response.set(http::field::content_type,file.mime);
-                response.set(http::field::cache_control,"private, max-age=31536000, immutable");
                 response.body()=file.bytes;
             } else {
                 response.result(file.code=="UNAUTHENTICATED"?http::status::unauthorized:file.code=="NOT_AUTHORIZED"?http::status::forbidden:file.code=="NOT_FOUND"?http::status::not_found:
