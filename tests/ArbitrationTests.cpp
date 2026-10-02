@@ -22,12 +22,12 @@ int main() {
     try {
         clean();
         {Store store(path.string());store.title("one","One");
-         for(const auto& [name,tag]:std::array<std::pair<const char*,const char*>,3>{{{"alice","Alice"},{"bob","Bob"},{"charlie","Charlie"}}})
+         for(const auto& [name,tag]:std::array<std::pair<const char*,const char*>,4>{{{"alice","Alice"},{"bob","Bob"},{"charlie","Charlie"},{"dave","Dave"}}})
              store.user(name,std::string(name)+"-password",tag);
          store.leaderboard("one",Json{{"key","Kills"},{"mode",0},{"ascending",false},{"aggregation","latest"},{"arbitrated",true},{"columns",Json::object()}});
          store.leaderboard("one",Json{{"key","Score"},{"mode",0},{"ascending",false},{"aggregation","latest"},{"arbitrated",false},{"columns",Json::object()}});}
-        Service service(path.string());std::array<std::string,3> tokens,users;
-        int index=0;for(const auto* name:{"alice","bob","charlie"}) {
+        Service service(path.string());std::array<std::string,4> tokens,users;
+        int index=0;for(const auto* name:{"alice","bob","charlie","dave"}) {
             auto login=call(service,"auth.login",{{"username",name},{"password",std::string(name)+"-password"}},{});
             check(login["error"]=="OK","fixture authentication");
             tokens[index]=login["result"]["token"].get<std::string>();users[index]=login["result"]["identity"]["userId"].get<std::string>();++index;
@@ -57,6 +57,8 @@ int main() {
         check(commit(0,Json::array({row(users[1],"Kills",3)}),std::nullopt)=="NOT_AUTHORIZED","arbitrated row requires the Ranked round");
         check(commit(0,Json::array({row(users[1],"Score",3)}),context)=="NOT_AUTHORIZED","nonarbitrated rows only for the machine's own gamers");
         check(commit(0,Json::array({row(users[0],"Kills",3)}),Json{{"session",std::string(32,'0')},{"revision",playing}})=="NOT_FOUND","unknown round");
+        check(commit(3,Json::array({row(users[0],"Kills",3)}),context)=="NOT_AUTHORIZED","outsider cannot report a real round");
+        check(commit(0,Json::array({row(users[3],"Kills",3)}),context)=="NOT_AUTHORIZED","participant cannot report an outsider");
         // Round one: all three machines report; alice's row is unanimous, bob's is a 2:1 majority,
         // charlie's has no majority and is discarded.
         check(commit(0,Json::array({row(users[0],"Kills",10),row(users[1],"Kills",5),row(users[2],"Kills",1),row(users[0],"Score",70)}),context)=="OK","host report");
@@ -88,6 +90,19 @@ int main() {
         check(commit(1,Json::array({row(users[0],"Kills",30),row(users[1],"Kills",7),row(users[2],"Kills",0)}),third)=="OK","finisher two");
         check(read("Kills","Alice")==30&&read("Kills","Bob")==7,"finishers agree about themselves");
         check(read("Kills","Charlie")==0,"two finishers outvote the leaver's self-report");
+        // Final round's membership is a historical result grant, surviving disconnect/deletion.
+        snapshot=call(service,"sessions.update",settings("lobby"),tokens[0])["result"];
+        snapshot=call(service,"sessions.update",settings("playing"),tokens[0])["result"];
+        const Json finalContext{{"session",session},{"revision",snapshot["revision"]}};
+        check(call(service,"sessions.leave",{{"session",session}},tokens[1])["error"]=="OK","participant disconnects");
+        check(commit(1,Json::array({row(users[0],"Kills",40)}),finalContext)=="OK","past participant may report after leaving");
+        check(call(service,"sessions.leave",{{"session",session}},tokens[2])["error"]=="OK","remaining client leaves");
+        check(call(service,"sessions.leave",{{"session",session}},tokens[0])["error"]=="OK","host deletes session");
+        check(commit(0,Json::array({row(users[0],"Kills",40)}),finalContext)=="OK","historical participant may report after deletion");
+        check(commit(3,Json::array({row(users[0],"Kills",999)}),finalContext)=="NOT_AUTHORIZED","deletion does not admit outsiders");
+        check(commit(2,Json::array({row(users[0],"Kills",40)}),finalContext)=="OK","remaining historical report resolves deleted session round");
+        check(read("Kills","Alice")==40,"deleted session agreement persists");
+        check(commit(2,Json::array({row(users[0],"Kills",41)}),finalContext)=="INVALID_STATE","contradictory post-deletion replay refused");
         clean();
         std::cout<<"arbitration "<<checks<<" assertions passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<"arbitration test failed: "<<error.what()<<"\n";clean();return 1;}
