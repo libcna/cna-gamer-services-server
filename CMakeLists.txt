@@ -212,3 +212,19 @@ add_test(NAME service_admission COMMAND admission_tests)
 
 add_test(NAME service_cache_authorization COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cache_authorization_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(service_cache_authorization PROPERTIES TIMEOUT 60)
+
+add_executable(progress_trust_tests tests/ProgressTrustTests.cpp)
+target_link_libraries(progress_trust_tests PRIVATE cna_service)
+target_compile_options(progress_trust_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_progress_trust COMMAND progress_trust_tests)
+
+add_executable(concurrency_lifetime_tests tests/ConcurrencyLifetimeTests.cpp)
+target_link_libraries(concurrency_lifetime_tests PRIVATE cna_service Threads::Threads)
+target_compile_options(concurrency_lifetime_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_concurrency_lifetime COMMAND concurrency_lifetime_tests)
+
+# Loopback qualification runs even where NAT namespaces are unavailable. Keep the isolated gates.
+add_test(NAME service_cna_session_host_crash_loopback COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --crash)
+set_tests_properties(service_cna_session_host_crash_loopback PROPERTIES TIMEOUT 240 SKIP_RETURN_CODE 77)
+add_test(NAME service_cna_session_add_gamer_loopback COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --add)
+set_tests_properties(service_cna_session_add_gamer_loopback PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
