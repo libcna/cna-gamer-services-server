@@ -60,6 +60,7 @@ target_link_libraries(cna_service PUBLIC OpenSSL::Crypto SQLite::SQLite3 nlohman
 target_compile_options(cna_service PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(cna-gamer-services-server src/Main.cpp src/Admission.cpp src/Listener.cpp src/RelayListener.cpp src/EventListener.cpp src/RelayFlow.cpp src/RelayHub.cpp)
 target_link_libraries(cna-gamer-services-server PRIVATE cna_service OpenSSL::SSL Boost::headers Threads::Threads)
+target_compile_definitions(cna-gamer-services-server PRIVATE CNA_SERVER_VERSION="${PROJECT_VERSION}")
 target_compile_options(cna-gamer-services-server PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(cna-gamer-services-admin src/Admin.cpp)
 target_link_libraries(cna-gamer-services-admin PRIVATE cna_service)
@@ -228,3 +229,49 @@ add_test(NAME service_cna_session_host_crash_loopback COMMAND ${Python3_EXECUTAB
 set_tests_properties(service_cna_session_host_crash_loopback PROPERTIES TIMEOUT 240 SKIP_RETURN_CODE 77)
 add_test(NAME service_cna_session_add_gamer_loopback COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --add)
 set_tests_properties(service_cna_session_add_gamer_loopback PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+
+# Black-box compatibility checks live outside the implementation tests and use only the public
+# HTTPS/WSS/admin surfaces. The smoke profile is intentionally short enough for normal qualification.
+add_test(NAME service_conformance_smoke COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/cna-gamer-services-conformance/conformance.py
+    --build ${CMAKE_CURRENT_BINARY_DIR} --smoke)
+set_tests_properties(service_conformance_smoke PROPERTIES TIMEOUT 120 LABELS "integration;conformance")
+add_test(NAME service_backup_restore COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/backup_restore_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(service_backup_restore PROPERTIES TIMEOUT 120 LABELS "integration;recovery")
+add_test(NAME service_diagnostics COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/diagnostics_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(service_diagnostics PROPERTIES TIMEOUT 120 LABELS "integration;observability")
+add_test(NAME service_loadlab_smoke COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/cna-gamer-services-loadlab/loadlab.py
+    --build ${CMAKE_CURRENT_BINARY_DIR} --smoke)
+set_tests_properties(service_loadlab_smoke PROPERTIES TIMEOUT 180 LABELS "integration;performance")
+add_test(NAME service_chaos_smoke COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/cna-gamer-services-chaos/chaos.py
+    --build ${CMAKE_CURRENT_BINARY_DIR} --smoke)
+set_tests_properties(service_chaos_smoke PROPERTIES TIMEOUT 180 LABELS "integration;chaos;recovery")
+add_test(NAME service_admin_web COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/admin_web_e2e.py ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(service_admin_web PROPERTIES TIMEOUT 120 LABELS "integration;admin")
+
+# Stable labels let one maintainer choose an honest qualification cost without remembering a long
+# regular expression. Tests requiring separately-built CNA programs retain exit-77 skip semantics.
+set(CNA_UNIT_TESTS
+    service_unit service_ranked_migration service_privacy service_database_lock service_atomicity
+    service_directory service_arbitration service_avatars service_avatar_validation service_social
+    service_invitations service_relay_protocol service_relay_authorization service_relay_flow
+    service_picture_privacy service_numeric_persistence service_admission service_progress_trust
+    service_concurrency_lifetime)
+set_tests_properties(${CNA_UNIT_TESTS} PROPERTIES LABELS "unit")
+set_tests_properties(service_tls_e2e service_benchmark_smoke service_relay_wss service_backup_restore
+    service_cache_authorization service_diagnostics PROPERTIES LABELS "integration")
+set_property(TEST service_backup_restore APPEND PROPERTY LABELS "recovery")
+set_property(TEST service_diagnostics APPEND PROPERTY LABELS "observability")
+set(CNA_HARNESS_TESTS
+    service_cna_directory service_cna_relay service_cna_relay_nat service_cna_owned_enet
+    service_cna_owned_enet_nat service_cna_session service_cna_session_nat service_cna_invite
+    service_cna_invite_nat service_cna_avatars service_cna_session_restart
+    service_cna_session_restart_nat service_cna_session_migration service_cna_session_host_crash
+    service_cna_session_add_gamer service_cna_session_host_crash_loopback
+    service_cna_session_add_gamer_loopback)
+set_tests_properties(${CNA_HARNESS_TESTS} PROPERTIES LABELS "cna-harness")

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
 #include <algorithm>
+#include <chrono>
 #include <openssl/crypto.h>
 #include <cmath>
 #include <optional>
@@ -47,11 +48,13 @@ void Service::setFaultHookForTesting(FaultHook hook) {faultHook_=hook;}
 void Service::fault(const char* point) {if(faultHook_)faultHook_(point);}
 Service::Service(const std::string& database):store_(database) {store_.exec("PRAGMA synchronous=NORMAL");}
 std::string Service::handle(std::string_view bytes,std::string_view peer) {
-    std::string id,code="OK",result;
+    const auto metricStarted=std::chrono::steady_clock::now();
+    std::string id,code="OK",result,operation="invalid";
     std::vector<std::pair<std::string,std::string>> hints;
     std::function<void(const std::string&,const std::string&)> sink;
     try {
         const auto request=parse(bytes);validateRequest(request);id=stringField(request,"id",64);
+        operation=stringField(request,"op",64);
         std::unique_lock lock(mutex_);
         hints_.clear();
         result=response(id,"OK",dispatch(request,std::string(peer),lock)).dump();
@@ -61,7 +64,15 @@ std::string Service::handle(std::string_view bytes,std::string_view peer) {
     } catch (const Error& e) { code=e.code();result=response(id,code).dump(); }
       catch (...) { code="INTERNAL_ERROR";result=response(id,code).dump(); }
     if(sink)for(const auto& [user,topic]:hints){try{sink(user,topic);}catch(...){}}
-    std::lock_guard counting(outcomesMutex_);++outcomes_[code];
+    if(code=="UNKNOWN_OPERATION")operation="unknown";
+    const auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now()-metricStarted).count();
+    constexpr std::array<long long,7> LatencyBounds{1000,5000,10000,25000,50000,100000,250000};
+    std::lock_guard counting(outcomesMutex_);
+    ++outcomes_[code];++metricOutcomes_[code];++metricOperations_[operation];
+    for(std::size_t index=0;index<LatencyBounds.size();++index)
+        if(elapsed<=LatencyBounds[index])++requestLatencyBuckets_[index];
+    ++requestLatencyBuckets_.back();requestLatencyMicroseconds_+=static_cast<unsigned long long>(elapsed);
     return result;
 }
 void Service::setHintSink(std::function<void(const std::string& user,const std::string& topic)> sink) {
@@ -81,6 +92,7 @@ std::string Service::eventAccount(std::string_view game,std::string_view token) 
     return session.text(0);
 }
 Service::File Service::file(std::string_view game,std::string_view token,std::string_view hash) {
+    const auto metricStarted=std::chrono::steady_clock::now();
     // One account may download this much an hour: dozens of complete catalogs, far below what a
     // client that re-downloads in a loop would take.
     constexpr long long MaxDownloadBytesPerHour=1LL<<30;
@@ -118,11 +130,42 @@ Service::File Service::file(std::string_view game,std::string_view token,std::st
     } catch(...) {
         out={"INTERNAL_ERROR",{},{}};
     }
-    std::lock_guard counting(outcomesMutex_);++outcomes_[out.code];
+    const auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now()-metricStarted).count();
+    constexpr std::array<long long,7> LatencyBounds{1000,5000,10000,25000,50000,100000,250000};
+    std::lock_guard counting(outcomesMutex_);
+    ++outcomes_[out.code];++metricOutcomes_[out.code];++metricOperations_["files.read"];
+    for(std::size_t index=0;index<LatencyBounds.size();++index)
+        if(elapsed<=LatencyBounds[index])++requestLatencyBuckets_[index];
+    ++requestLatencyBuckets_.back();requestLatencyMicroseconds_+=static_cast<unsigned long long>(elapsed);
     return out;
 }
 std::map<std::string,unsigned long long> Service::takeOutcomes() {
     std::lock_guard counting(outcomesMutex_);return std::exchange(outcomes_,{});
+}
+Service::Metrics Service::metrics() {
+    Metrics result;
+    try {
+        std::lock_guard lock(mutex_);
+        Statement version(store_.db(),"PRAGMA user_version");(void)version.row();result.schemaVersion=version.number(0);
+        Statement foreignKeys(store_.db(),"PRAGMA foreign_keys");(void)foreignKeys.row();
+        Statement counts(store_.db(),"SELECT (SELECT COUNT(*) FROM titles),(SELECT COUNT(*) FROM users),"
+            "(SELECT COUNT(*) FROM sessions WHERE expires>?1),(SELECT COUNT(*) FROM directory_sessions WHERE expires>?1),"
+            "(SELECT COUNT(*) FROM session_invitations WHERE status='pending' AND expires>?1)");
+        counts.bind(1,now());(void)counts.row();
+        result.titles=counts.number(0);result.accounts=counts.number(1);
+        result.activeAccessSessions=counts.number(2);result.activeDirectorySessions=counts.number(3);
+        result.pendingInvitations=counts.number(4);
+        Statement pages(store_.db(),"PRAGMA page_count");(void)pages.row();
+        Statement pageSize(store_.db(),"PRAGMA page_size");(void)pageSize.row();
+        result.databaseBytes=pages.number(0)*pageSize.number(0);
+        result.ready=result.schemaVersion==SchemaVersion&&foreignKeys.number(0)==1;
+    } catch(...) { result.ready=false; }
+    std::lock_guard counting(outcomesMutex_);
+    result.outcomes=metricOutcomes_;result.operations=metricOperations_;
+    result.requestLatencyBuckets=requestLatencyBuckets_;
+    result.requestLatencyMicroseconds=requestLatencyMicroseconds_;
+    return result;
 }
 Json Service::identity(const std::string& id) {
     Statement s(store_.db(),"SELECT id,gamertag,motto,region,online_allowed,picture,gamer_zone FROM users WHERE id=?");s.bind(1,id);

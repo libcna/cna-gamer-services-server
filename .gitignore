@@ -2,6 +2,7 @@
 /build*/
 /.idea/
 /.vscode/
+/.aws
 /CMakeUserPresets.json
 /service-data/
 *.sqlite3*

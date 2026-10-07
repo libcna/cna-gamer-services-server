@@ -1,0 +1,38 @@
+[Unit]
+Description=CNA Gamer Services Server
+Documentation=https://github.com/libcna/cna-gamer-services-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cna-gamer-services
+Group=cna-gamer-services
+StateDirectory=cna-gamer-services
+StateDirectoryMode=0700
+LoadCredential=certificate.pem:/etc/cna-gamer-services/certificate.pem
+LoadCredential=private-key.pem:/etc/cna-gamer-services/private-key.pem
+ExecStart=/usr/local/bin/cna-gamer-services-server --database /var/lib/cna-gamer-services/service.sqlite3 --listen 0.0.0.0 --port 47831 --cert %d/certificate.pem --key %d/private-key.pem --diagnostics-listen 127.0.0.1 --diagnostics-port 47832 --log-format json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+LimitNOFILE=65536
+
+# The database is the only persistent write target. PrivateTmp isolates accidental scratch files;
+# credentials are copied by systemd into the service's private, read-only credential directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

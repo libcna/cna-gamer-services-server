@@ -42,10 +42,19 @@ public:
             co_await socket_.async_read(input,net::use_awaitable);
             if(!socket_.got_text())throw Error("MALFORMED_MESSAGE");
             const auto hello=parse(beast::buffers_to_string(input.data()));input.consume(input.size());
-            if(!hello.is_object()||hello.value("v",0)!=1||!hello.contains("game")||!hello["game"].is_string()
-                ||!hello.contains("token")||!hello["token"].is_string())throw Error("MALFORMED_MESSAGE");
-            const auto id=hello.contains("id")&&hello["id"].is_string()?hello["id"].get<std::string>():std::string();
-            game_=hello["game"].get<std::string>();token_=hello["token"].get<std::string>();
+            // The event credential envelope is deliberately exact, as the relay hello and control
+            // envelope are. Ignoring an extra field risks accidentally assigning meaning to it in
+            // one client while the server authenticates a different message.
+            if(!hello.is_object()||hello.size()!=4||!hello.contains("v")||!hello["v"].is_number_integer())
+                throw Error("MALFORMED_MESSAGE");
+            for(const auto& [key,value]:hello.items()) {
+                (void)value;
+                if(key!="v"&&key!="id"&&key!="game"&&key!="token")throw Error("MALFORMED_MESSAGE");
+            }
+            if(hello["v"]!=ProtocolVersion)throw Error("UNSUPPORTED_VERSION");
+            const auto id=stringField(hello,"id",64);
+            game_=stringField(hello,"game",64);token_=stringField(hello,"token",128);
+            if(!identifier(id)||!identifier(game_)||token_.size()!=64)throw Error("INVALID_ARGUMENT");
             user_=co_await net::co_spawn(workers_,[&]()->net::awaitable<std::string>{co_return service_.eventAccount(game_,token_);},net::use_awaitable);
             if(!hub_.attach(user_,self))throw Error("LIMIT_EXCEEDED");
             attached_=true;

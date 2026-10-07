@@ -11,10 +11,12 @@
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 #include <utility>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <thread>
 #if __has_include(<sys/resource.h>)
 #include <sys/resource.h>
@@ -50,16 +52,23 @@ bool signIn(std::string_view body) {
 }
 // One line a minute for the operator: responses per error code, refused connections, open
 // control connections and attached relays. Never a credential, address or request body.
-net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub,EventHub& events) {
+net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub,EventHub& events,bool jsonLogging) {
     net::steady_timer timer(co_await net::this_coro::executor);
     while(true) {
         timer.expires_after(std::chrono::minutes(1));
         co_await timer.async_wait(net::use_awaitable);
-        std::ostringstream line;line<<"stats";
-        for(const auto& [code,count]:service.takeOutcomes())line<<' '<<code<<'='<<count;
+        const auto outcomes=service.takeOutcomes();
         const auto [control,refused]=admission.take();
-        line<<" refused="<<refused<<" control="<<control<<" relays="<<hub.size()<<" events="<<events.size();
-        std::cout<<line.str()<<std::endl;
+        if(jsonLogging) {
+            std::cout<<Json{{"timestamp",now()},{"level","info"},{"event","statistics"},
+                {"outcomes",outcomes},{"refusedConnections",refused},{"controlConnections",control},
+                {"relayConnections",hub.size()},{"eventConnections",events.size()}}.dump()<<std::endl;
+        } else {
+            std::ostringstream line;line<<"stats";
+            for(const auto& [code,count]:outcomes)line<<' '<<code<<'='<<count;
+            line<<" refused="<<refused<<" control="<<control<<" relays="<<hub.size()<<" events="<<events.size();
+            std::cout<<line.str()<<std::endl;
+        }
     }
 }
 class ConnectionLease {
@@ -170,12 +179,122 @@ net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ss
         net::co_spawn(executor,connection(std::move(socket),std::move(peer),admission,tls,service,hub,events,workers,insecure),net::detached);
     }
 }
+std::string labelValue(std::string_view value) {
+    std::string escaped;escaped.reserve(value.size());
+    for(const char character:value) {
+        if(character=='\\'||character=='\"')escaped.push_back('\\');
+        if(character=='\n'){escaped+="\\n";continue;}
+        escaped.push_back(character);
+    }
+    return escaped;
+}
+std::string prometheus(const Service::Metrics& metrics,const Admission::Snapshot& admission,
+                       const Admission::Snapshot& diagnostics,std::size_t relays,std::size_t events,
+                       std::chrono::steady_clock::time_point started) {
+    const auto uptime=std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now()-started).count();
+    std::ostringstream out;
+    out<<"# HELP cna_build_info Build information.\n# TYPE cna_build_info gauge\ncna_build_info{version=\""<<CNA_SERVER_VERSION<<"\"} 1\n"
+       <<"# HELP cna_up Whether the process is running.\n# TYPE cna_up gauge\ncna_up 1\n"
+       <<"# HELP cna_ready Whether storage is usable at the expected schema.\n# TYPE cna_ready gauge\ncna_ready "<<(metrics.ready?1:0)<<'\n'
+       <<"# HELP cna_uptime_seconds Process uptime.\n# TYPE cna_uptime_seconds gauge\ncna_uptime_seconds "<<uptime<<'\n'
+       <<"# HELP cna_schema_version SQLite schema version.\n# TYPE cna_schema_version gauge\ncna_schema_version "<<metrics.schemaVersion<<'\n'
+       <<"# HELP cna_database_bytes Allocated SQLite database bytes.\n# TYPE cna_database_bytes gauge\ncna_database_bytes "<<metrics.databaseBytes<<'\n'
+       <<"# HELP cna_titles Provisioned titles.\n# TYPE cna_titles gauge\ncna_titles "<<metrics.titles<<'\n'
+       <<"# HELP cna_accounts Provisioned accounts.\n# TYPE cna_accounts gauge\ncna_accounts "<<metrics.accounts<<'\n'
+       <<"# HELP cna_access_sessions Active access credentials.\n# TYPE cna_access_sessions gauge\ncna_access_sessions "<<metrics.activeAccessSessions<<'\n'
+       <<"# HELP cna_directory_sessions Active multiplayer directory sessions.\n# TYPE cna_directory_sessions gauge\ncna_directory_sessions "<<metrics.activeDirectorySessions<<'\n'
+       <<"# HELP cna_pending_invitations Unexpired pending invitations.\n# TYPE cna_pending_invitations gauge\ncna_pending_invitations "<<metrics.pendingInvitations<<'\n'
+       <<"# HELP cna_connections Current connections by surface.\n# TYPE cna_connections gauge\n"
+       <<"cna_connections{surface=\"control\"} "<<admission.connections<<'\n'
+       <<"cna_connections{surface=\"relay\"} "<<relays<<'\n'
+       <<"cna_connections{surface=\"events\"} "<<events<<'\n'
+       <<"cna_connections{surface=\"diagnostics\"} "<<diagnostics.connections<<'\n'
+       <<"# HELP cna_refused_connections_total Connections refused since process start.\n# TYPE cna_refused_connections_total counter\n"
+       <<"cna_refused_connections_total{surface=\"control\"} "<<admission.refused<<'\n'
+       <<"cna_refused_connections_total{surface=\"diagnostics\"} "<<diagnostics.refused<<'\n'
+       <<"# HELP cna_responses_total Service responses by bounded outcome.\n# TYPE cna_responses_total counter\n";
+    for(const auto& [outcome,count]:metrics.outcomes)out<<"cna_responses_total{outcome=\""<<labelValue(outcome)<<"\"} "<<count<<'\n';
+    out<<"# HELP cna_operations_total Service requests by bounded operation.\n# TYPE cna_operations_total counter\n";
+    for(const auto& [operation,count]:metrics.operations)out<<"cna_operations_total{operation=\""<<labelValue(operation)<<"\"} "<<count<<'\n';
+    constexpr std::array<std::string_view,8> LatencyLabels{"0.001","0.005","0.01","0.025","0.05","0.1","0.25","+Inf"};
+    out<<"# HELP cna_request_duration_seconds Service request duration.\n# TYPE cna_request_duration_seconds histogram\n";
+    for(std::size_t index=0;index<LatencyLabels.size();++index)
+        out<<"cna_request_duration_seconds_bucket{le=\""<<LatencyLabels[index]<<"\"} "<<metrics.requestLatencyBuckets[index]<<'\n';
+    out<<"cna_request_duration_seconds_sum "<<static_cast<double>(metrics.requestLatencyMicroseconds)/1000000.0<<'\n'
+       <<"cna_request_duration_seconds_count "<<metrics.requestLatencyBuckets.back()<<'\n';
+    return out.str();
+}
+net::awaitable<void> diagnosticsConnection(tcp::socket socket,std::string peer,Admission& admission,
+        Admission& controlAdmission,
+        Service& service,RelayHub& hub,EventHub& events,Workers& workers,
+        std::chrono::steady_clock::time_point started) {
+    ConnectionLease lease(admission,std::move(peer));
+    try {
+        beast::tcp_stream stream(std::move(socket));stream.expires_after(std::chrono::seconds(5));
+        beast::flat_buffer buffer;http::request_parser<http::string_body> parser;
+        parser.body_limit(0);parser.header_limit(4096);
+        co_await http::async_read(stream,buffer,parser,net::use_awaitable);
+        const auto request=parser.release();
+        http::response<http::string_body> response{http::status::ok,11};
+        response.set(http::field::cache_control,"no-store");
+        response.set("X-Content-Type-Options","nosniff");
+        response.keep_alive(false);
+        if(request.method()!=http::verb::get) {
+            response.result(http::status::method_not_allowed);response.set(http::field::allow,"GET");
+            response.set(http::field::content_type,"application/json");response.body()=Json{{"error","METHOD_NOT_ALLOWED"}}.dump();
+        } else if(request.target()=="/healthz") {
+            response.set(http::field::content_type,"application/json");response.body()=Json{{"status","ok"}}.dump();
+        } else if(request.target()=="/readyz"||request.target()=="/metrics") {
+            const auto metrics=co_await net::co_spawn(workers.requests,[&service]()->net::awaitable<Service::Metrics>{co_return service.metrics();},net::use_awaitable);
+            if(request.target()=="/readyz") {
+                if(!metrics.ready)response.result(http::status::service_unavailable);
+                response.set(http::field::content_type,"application/json");
+                response.body()=Json{{"status",metrics.ready?"ready":"not-ready"},{"schemaVersion",metrics.schemaVersion},
+                    {"expectedSchemaVersion",SchemaVersion}}.dump();
+            } else {
+                response.set(http::field::content_type,"text/plain; version=0.0.4; charset=utf-8");
+                response.body()=prometheus(metrics,controlAdmission.snapshot(),admission.snapshot(),hub.size(),events.size(),started);
+            }
+        } else {
+            response.result(http::status::not_found);response.set(http::field::content_type,"application/json");
+            response.body()=Json{{"error","NOT_FOUND"}}.dump();
+        }
+        response.prepare_payload();
+        co_await http::async_write(stream,response,net::use_awaitable);
+    } catch(...) { /* The diagnostics listener exposes no request data in logs. */ }
+}
+net::awaitable<void> diagnosticsAccept(tcp::acceptor& acceptor,Admission& admission,
+        Admission& controlAdmission,Service& service,
+        RelayHub& hub,EventHub& events,Workers& workers,std::chrono::steady_clock::time_point started) {
+    net::steady_timer pause(acceptor.get_executor());
+    while(true) {
+        tcp::socket socket(net::make_strand(acceptor.get_executor()));boost::system::error_code ec;
+        co_await acceptor.async_accept(socket,net::redirect_error(net::use_awaitable,ec));
+        if(ec) {
+            pause.expires_after(std::chrono::milliseconds(100));
+            co_await pause.async_wait(net::redirect_error(net::use_awaitable,ec));continue;
+        }
+        const auto endpoint=socket.remote_endpoint(ec);if(ec)continue;
+        auto peer=endpoint.address().to_string();
+        if(!admission.admit(peer)){socket.close(ec);continue;}
+        auto executor=socket.get_executor();
+        net::co_spawn(executor,diagnosticsConnection(std::move(socket),std::move(peer),admission,
+            controlAdmission,service,hub,events,workers,started),net::detached);
+    }
+}
 }
 void listen(const std::string& database,const std::string& address,unsigned short port,
-            const std::string& certificate,const std::string& key,bool insecureLoopback) {
+            const std::string& certificate,const std::string& key,bool insecureLoopback,
+            bool diagnosticsEnabled,const std::string& diagnosticsAddress,
+            unsigned short diagnosticsPort,bool jsonLogging) {
     const auto bind=net::ip::make_address(address);
     if(insecureLoopback && !bind.is_loopback())throw Error("INSECURE_BIND_REFUSED");
     if(!insecureLoopback && (certificate.empty()||key.empty()))throw Error("TLS_REQUIRED");
+    std::optional<net::ip::address> diagnosticsBind;
+    if(diagnosticsEnabled) {
+        diagnosticsBind=net::ip::make_address(diagnosticsAddress);
+        if(!diagnosticsBind->is_loopback())throw Error("DIAGNOSTICS_BIND_REFUSED");
+    }
     raiseDescriptorLimit();
     Service service(database);RelayHub hub;EventHub events;
     service.setHintSink([&events](const std::string& user,const std::string& topic){events.notify(user,topic);});
@@ -186,11 +305,24 @@ void listen(const std::string& database,const std::string& address,unsigned shor
         if(SSL_CTX_check_private_key(tls.native_handle())!=1)throw Error("TLS_REQUIRED");
     }
     tcp::acceptor acceptor(io,{bind,port});
+    std::optional<tcp::acceptor> diagnosticsAcceptor;
+    if(diagnosticsEnabled)diagnosticsAcceptor.emplace(io,tcp::endpoint{*diagnosticsBind,diagnosticsPort});
     net::signal_set signals(io,SIGINT,SIGTERM);signals.async_wait([&](auto,int){io.stop();});
-    Workers workers;Admission admission;
+    Workers workers;Admission admission,diagnosticsAdmission;
+    const auto started=std::chrono::steady_clock::now();
     net::co_spawn(io,accept(acceptor,admission,tls,service,hub,events,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
-    net::co_spawn(io,report(service,admission,hub,events),net::detached);
-    std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
+    if(diagnosticsAcceptor)net::co_spawn(io,diagnosticsAccept(*diagnosticsAcceptor,diagnosticsAdmission,
+        admission,service,hub,events,workers,started),net::detached);
+    net::co_spawn(io,report(service,admission,hub,events,jsonLogging),net::detached);
+    if(jsonLogging)std::cout<<Json{{"timestamp",now()},{"level","info"},{"event","service_listening"},
+        {"address",address},{"port",acceptor.local_endpoint().port()},{"tls",!insecureLoopback},
+        {"version",CNA_SERVER_VERSION}}.dump()<<std::endl;
+    else std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
+    if(diagnosticsAcceptor) {
+        if(jsonLogging)std::cout<<Json{{"timestamp",now()},{"level","info"},{"event","diagnostics_listening"},
+            {"address",diagnosticsAddress},{"port",diagnosticsAcceptor->local_endpoint().port()}}.dump()<<std::endl;
+        else std::cout<<"CNA diagnostics listening on "<<diagnosticsAddress<<":"<<diagnosticsAcceptor->local_endpoint().port()<<std::endl;
+    }
     std::jthread worker([&]{io.run();});io.run();worker.join();
     workers.requests.join();workers.signIns.join();
 }

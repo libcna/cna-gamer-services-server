@@ -18,8 +18,8 @@ average at 13-17, measured about half: 594 req/s steady.
 To add a run:
 
 ```sh
-cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-probe
-python3 tests/service_benchmark.py build-probe --json /tmp/result.json
+cmake --preset release && cmake --build --preset release
+python3 tests/service_benchmark.py build-release --json /tmp/result.json
 ```
 
 then record the commit, `c++ --version`, `lscpu`, `/proc/loadavg` before and after, and the

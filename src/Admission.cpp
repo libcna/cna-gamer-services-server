@@ -14,18 +14,19 @@ bool Admission::admit(const std::string& peer, std::chrono::steady_clock::time_p
         std::lock_guard lock(mutex_);
         const auto held=peers_.find(peer);
         if(control_>=MaxControlConnections||(held!=peers_.end()&&held->second>=MaxPeerConnections)) {
-            ++refused_;return false;
+            ++refused_;++refusedTotal_;return false;
         }
         if(rates_.size()>=4096)std::erase_if(rates_,[&](const auto& entry){return now-entry.second.first>=std::chrono::minutes(1);});
-        if(rates_.size()>=4096&&!rates_.contains(peer)) {++refused_;return false;}
+        if(rates_.size()>=4096&&!rates_.contains(peer)) {++refused_;++refusedTotal_;return false;}
         auto& [start,opened]=rates_[peer];
         if(now-start>=std::chrono::minutes(1)){start=now;opened=0;}
         if(opened>=MaxPeerConnectionsPerMinute) {
-            ++refused_;return false;
+            ++refused_;++refusedTotal_;return false;
         }
         ++opened;++peers_[peer];++control_;return true;
     }
 std::pair<int,unsigned long long> Admission::take() {std::lock_guard lock(mutex_);return {control_,std::exchange(refused_,0)};}
+Admission::Snapshot Admission::snapshot() {std::lock_guard lock(mutex_);return {control_,refusedTotal_};}
 void Admission::leave(const std::string& peer) {
         std::lock_guard lock(mutex_);
         --control_;if(const auto held=peers_.find(peer);held!=peers_.end()&&--held->second<=0)peers_.erase(held);

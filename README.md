@@ -54,12 +54,28 @@ Dependencies: OpenSSL >=3, Boost >=1.74 (headers, Beast), SQLite >=3.38, nlohman
 all from the system.
 
 ```sh
-cmake -S . -B build -G Ninja && cmake --build build --parallel
-build/cna-gamer-services-server --database service.sqlite3 --listen 0.0.0.0 --port 47831 \
-    --cert certificate.pem --key private-key.pem
+cmake --preset dev
+cmake --build --preset dev       # ccache, at most six compile jobs
+build-agent/cna-gamer-services-server --database service.sqlite3 --listen 0.0.0.0 --port 47831 \
+    --cert certificate.pem --key private-key.pem --diagnostics-port 47832 --log-format json
 # Development only, plain HTTP on a numeric loopback address:
-build/cna-gamer-services-server --database service.sqlite3 --insecure-loopback
+build-agent/cna-gamer-services-server --database service.sqlite3 --insecure-loopback
 ```
+
+`ccache` is required for the maintained presets. `tools/qualify.sh quick` is the shortest supported
+build-and-test command; `normal`, `full`, `security` and `performance` select broader tiers. Developer
+and release work is capped at six jobs; memory-heavy sanitizer builds and tests run serially.
+
+### Human-maintainer toolchain
+
+| Tool | Purpose | Smoke command |
+|---|---|---|
+| [Conformance](tools/cna-gamer-services-conformance/README.md) | independent stateful HTTPS/WSS protocol contract | `python3 tools/cna-gamer-services-conformance/conformance.py --build build-agent --smoke` |
+| [Loadlab](tools/cna-gamer-services-loadlab/README.md) | six-worker realistic load, relay shapes and bounded soak reports | `python3 tools/cna-gamer-services-loadlab/loadlab.py --build build-agent --smoke` |
+| [Chaos](tools/cna-gamer-services-chaos/README.md) | scratch-only crash, lock, disconnect, hostile transport and corruption tests | `python3 tools/cna-gamer-services-chaos/chaos.py --build build-agent --smoke` |
+| [Admin web](tools/cna-gamer-services-admin-web/README.md) | authenticated/CSRF-protected loopback browser administration | see its password-file quick start |
+| [Deployment](tools/cna-gamer-services-deploy/README.md) | systemd/container/L4 examples and verified online backup/restore | `ctest --test-dir build-agent -R service_backup_restore` |
+| [Offline handbook](tools/cna-gamer-services-docs/README.md) | 34-chapter searchable technical site, diagrams and 17 labs | `python3 tools/cna-gamer-services-docs/check.py . --strict` |
 
 CNA finds the service through `CNA_GAMER_SERVICES_ENDPOINT` (for example
 `https://games.example.org:47831/cna/v1`), `CNA_GAME_ID` (a title ID registered below) and, for a
@@ -67,7 +83,7 @@ private CA, `CNA_GAMER_SERVICES_CA_BUNDLE`; see CNA's `docs/gamer-services-serve
 
 ## Administration
 
-`build/cna-gamer-services-admin <database> <command> ...` works on the same database as a running
+`build-agent/cna-gamer-services-admin <database> <command> ...` works on the same database as a running
 server and never prints a credential. Passwords and JSON documents come from stdin.
 
 | Command | Effect |
@@ -91,9 +107,10 @@ server and never prints a credential. Passwords and JSON documents come from std
 ## Operating it
 
 **Files.** One SQLite database in WAL mode (`service.sqlite3`, `-wal`, `-shm`) plus the TLS key.
-Restrict both to the unprivileged service user. Back up with SQLite's online backup
-(`sqlite3 service.sqlite3 ".backup backup.sqlite3"`), never by copying the file while it runs.
-Opening a database migrates it transactionally to the current schema (20); a newer schema is
+Restrict both to the unprivileged service user. Back up with the checked-in SQLite online-backup
+tool (`python3 tools/cna-gamer-services-deploy/backup.py --database service.sqlite3 --output-dir backups`),
+never by copying the file while it runs.
+Opening a database migrates it transactionally to the current schema (23); a newer schema is
 refused and nothing is deleted to resolve it. Back up before upgrading the server.
 
 **TLS.** TLS 1.2 or newer with the given chain and key; clients verify chain and hostname. A new
@@ -125,7 +142,11 @@ heartbeats, lease and presence updates record none). Past 32 live sign-ins an ac
 refresh family is signed out. The server raises its descriptor limit to what the host allows
 (up to 65536) and keeps serving when descriptors run out.
 
-**Monitoring.** One line a minute on stdout, never with a credential, address or request body:
+**Monitoring.** Add `--diagnostics-port 47832` for loopback-only HTTP `/healthz`, `/readyz` and
+Prometheus `/metrics`; a non-loopback diagnostics address is refused. See
+[docs/operations.md](docs/operations.md) for exact readiness semantics and the complete metric/log
+reference. Add `--log-format json` for machine-readable startup and minute statistics. The default
+remains one human-readable line a minute, never with a credential, address or request body:
 
 ```
 stats AUTHENTICATION_FAILED=1 OK=5412 RATE_LIMITED=3 refused=0 control=41 relays=12 events=37
@@ -191,8 +212,8 @@ The server is built to face untrusted clients, but a public deployment still nee
    created by the operator (`user`); there is no self-registration and no password reset by mail.
 6. **Backups** with SQLite's online backup on a schedule, a restore tried once, and a backup taken
    before every upgrade (migrations only go forward).
-7. **Monitoring** of the per-minute statistics line: alert on `INTERNAL_ERROR`, on `refused` rising
-   and on `RATE_LIMITED` bursts.
+7. **Monitoring** of loopback readiness/Prometheus metrics and operational logs: alert on
+   `INTERNAL_ERROR`, on refusals rising and on material latency drift.
 8. **Capacity.** One process, one machine (see below): about 1,200 requests a second in the committed
    measurement (`benchmarks/`), while an idle player costs about two a minute.
 
@@ -205,8 +226,8 @@ authenticated mix, no think time), `logins` (the same plus eight clients signing
 200,000) and `descriptors` (a server limited to 48 descriptors facing 80 idle connections).
 
 ```sh
-cmake -S . -B build-probe -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-probe
-python3 tests/service_benchmark.py build-probe --json result.json
+cmake --preset release && cmake --build --preset release
+python3 tests/service_benchmark.py build-release --json result.json
 ```
 
 The evidence is committed in [`benchmarks/`](benchmarks/): each run's commit, build, compiler,
@@ -258,7 +279,7 @@ derivation.
 
 ## Tests
 
-`ctest --test-dir build --output-on-failure` runs the unit suites (service, directory,
+`CTEST_PARALLEL_LEVEL=6 ctest --test-dir build-agent --output-on-failure` runs the unit suites (service, directory,
 invitations, arbitration, avatars, social, relay protocol/authority/flow), the TLS end-to-end test
 with separate Python clients and restart persistence, the WSS relay test (Python `websockets`,
 pinned in `tests/requirements.txt`) and the benchmark smoke pass.
@@ -275,7 +296,7 @@ CNA_SERVICE_RELAY_CLIENT_HARNESS=$B/cna_service_relay_client_harness \
 CNA_SERVICE_SESSION_CLIENT_HARNESS=$B/cna_service_session_client_harness \
 CNA_SERVICE_AVATAR_CLIENT_HARNESS=$B/cna_service_avatar_client_harness \
 CNA_AVATAR_CATALOGS=$CNA/modules/gamer-services/assets/avatars \
-ctest --test-dir build --output-on-failure
+CTEST_PARALLEL_LEVEL=6 ctest --test-dir build-agent --output-on-failure
 ```
 
 They cover Guide sign-in, social flows, pictures and rich presence through the standard XNA API
@@ -295,7 +316,7 @@ linked:
 ```sh
 CNA_SERVICE_SLIRP4NETNS=/absolute/slirp4netns \
 CNA_SERVICE_SLIRP_LIBRARY_PATH=/optional/unpacked/library/path \
-ctest --test-dir build -R '_nat$|host_crash|add_gamer' --output-on-failure
+CTEST_PARALLEL_LEVEL=6 ctest --test-dir build-agent -R '_nat$|host_crash|add_gamer' --output-on-failure
 ```
 
 Tested with Debian slirp4netns 1.2.1 and libslirp 4.8.0 unpacked outside the repository; their

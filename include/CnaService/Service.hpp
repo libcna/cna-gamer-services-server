@@ -4,6 +4,7 @@
 #include "CnaService/Avatars.hpp"
 #include <mutex>
 #include "CnaService/RelayAuthorization.hpp"
+#include <array>
 #include <functional>
 #include <map>
 #include <utility>
@@ -35,6 +36,19 @@ public:
     /** @brief Takes the count of responses per error code since the previous call, for the
      * operator's periodic statistics. @return Code to count; OK included. */
     std::map<std::string,unsigned long long> takeOutcomes();
+    /** @brief Low-cardinality cumulative diagnostics for a private health/metrics listener. */
+    struct Metrics {
+        bool ready=false;
+        long long schemaVersion=0;
+        long long titles=0,accounts=0,activeAccessSessions=0,activeDirectorySessions=0;
+        long long pendingInvitations=0,databaseBytes=0;
+        std::array<unsigned long long,8> requestLatencyBuckets{};
+        unsigned long long requestLatencyMicroseconds=0;
+        std::map<std::string,unsigned long long> outcomes,operations;
+    };
+    /** @brief Reads current schema/data counts and cumulative request counters without exposing
+     * player identifiers. @return Bounded diagnostics snapshot. */
+    Metrics metrics();
     /** @brief Redeems short-lived one-use authority on an encrypted relay connection.
      * @param game Title. @param ticket Secret from HTTPS; never logged. @return Server-owned grant. */
     RelayGrant redeemRelayTicket(const std::string& game,const std::string& ticket);
@@ -101,6 +115,9 @@ private:
     long long lastTrim_=0;
     std::mutex outcomesMutex_;
     std::map<std::string,unsigned long long> outcomes_;
+    std::map<std::string,unsigned long long> metricOutcomes_,metricOperations_;
+    std::array<unsigned long long,8> requestLatencyBuckets_{};
+    unsigned long long requestLatencyMicroseconds_=0;
     std::map<std::string,long long> requestIdCounts_;
     std::map<std::string,Rate> requestBudgets_;
     std::map<long long,CatalogInfo> catalogs_;

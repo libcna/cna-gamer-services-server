@@ -323,7 +323,10 @@ CatalogInfo catalogInfo(sqlite3* db,long long version)
     info.manifestSha256=sha256(info.manifest);
     const auto manifest=parse(info.manifest);
     info.reader=static_cast<int>(manifest.value("reader",1));
-    info.formats={1};
+    // GCC 14's optimized sanitizer build misdiagnoses vector's one-element initializer-list
+    // assignment as an out-of-bounds memmove. The direct append expresses the same intent and
+    // avoids that library inlining path.
+    info.formats.push_back(1);
     if(manifest.contains("faceControls")||manifest.contains("featureItems"))info.formats.push_back(2);
     for(const auto& asset:manifest.at("assets"))info.totalBytes+=asset.at("size").get<long long>();
     Statement items(db,"SELECT id,slot FROM avatar_catalog_items WHERE version=?");items.bind(1,version);
