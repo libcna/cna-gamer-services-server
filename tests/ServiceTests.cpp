@@ -285,7 +285,7 @@ int main() {
             // signs the oldest family out rather than locking the account out.
             {Store db(path.string());db.exec("UPDATE refresh_families SET revoked=1 WHERE user_id=(SELECT id FROM users WHERE username='bob');");}
             std::vector<std::string> tokens;
-            for(int batch=0;tokens.size()<33;++batch) {
+            while(tokens.size()<33) {
                 Service s(path.string());
                 for(int i=0;i<10&&tokens.size()<33;++i) {
                     auto login=call(s,"two","auth.login",{{"username","bob"},{"password","bob-password"}});

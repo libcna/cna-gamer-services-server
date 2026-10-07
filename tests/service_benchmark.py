@@ -138,9 +138,13 @@ def descriptors(build, db, ca, key):
     """Exhausts the server's file descriptors with idle connections, then asks it for service."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
-    process = subprocess.Popen(["prlimit", "--nofile=48:48", str(build / "cna-gamer-services-server"), "--database", str(db),
+    def limit_descriptors():
+        # setrlimit rather than util-linux's prlimit(1), which exists only on Linux.
+        import resource
+        resource.setrlimit(resource.RLIMIT_NOFILE, (48, 48))
+    process = subprocess.Popen([str(build / "cna-gamer-services-server"), "--database", str(db),
                                 "--listen", "127.0.0.1", "--port", str(port), "--cert", str(ca), "--key", str(key)],
-                               stdout=subprocess.PIPE, text=True)
+                               stdout=subprocess.PIPE, text=True, preexec_fn=limit_descriptors)
     try:
         assert "listening" in process.stdout.readline()
         held = [socket.create_connection(("127.0.0.1", port), timeout=5, source_address=(source(45000 + index), 0)) for index in range(80)]
