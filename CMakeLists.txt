@@ -77,7 +77,7 @@ add_test(NAME service_tls_e2e COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOUR
 set_tests_properties(service_tls_e2e PROPERTIES TIMEOUT 120)
 # Concurrency benchmark (tests/service_benchmark.py); the smoke pass only checks it runs cleanly.
 add_test(NAME service_benchmark_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/service_benchmark.py ${CMAKE_CURRENT_BINARY_DIR} --smoke)
-set_tests_properties(service_benchmark_smoke PROPERTIES TIMEOUT 120)
+set_tests_properties(service_benchmark_smoke PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 # A Ranked game across a host crash, migration, departures, a restart and retries.
 add_executable(ranked_migration_tests tests/RankedMigrationTests.cpp)
@@ -245,7 +245,7 @@ set_tests_properties(service_diagnostics PROPERTIES TIMEOUT 120 LABELS "integrat
 add_test(NAME service_loadlab_smoke COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/cna-gamer-services-loadlab/loadlab.py
     --build ${CMAKE_CURRENT_BINARY_DIR} --smoke)
-set_tests_properties(service_loadlab_smoke PROPERTIES TIMEOUT 180 LABELS "integration;performance")
+set_tests_properties(service_loadlab_smoke PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77 LABELS "integration;performance")
 add_test(NAME service_chaos_smoke COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/cna-gamer-services-chaos/chaos.py
     --build ${CMAKE_CURRENT_BINARY_DIR} --smoke)

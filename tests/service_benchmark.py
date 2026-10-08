@@ -247,6 +247,17 @@ def fill_request_ids(db, target):
                                ((TITLE, f"fill-{index}", now - 3600) for index in range(max(0, target - present))))
 
 
+
+def distinct_loopback_sources_available():
+    """Whether this host routes 127.0.0.2 like 127.0.0.1. Linux answers the whole of 127/8 on lo;
+    macOS configures only 127.0.0.1 on lo0 (others need an `ifconfig lo0 alias`, a system change)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.2", 0))
+        return True
+    except OSError:
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("build")
@@ -260,6 +271,11 @@ def main():
     parser.add_argument("--json")
     parser.add_argument("--smoke", action="store_true")
     options = parser.parse_args()
+    if not distinct_loopback_sources_available():
+        print("Distinct loopback source addresses (127.0.0.2 and up) are not routed on this host; "
+              "this load model gives every simulated peer its own address, as the server's per-address "
+              "limits require. Not run.")
+        return 77
     if options.smoke:
         options.players, options.signers, options.idle, options.seconds, options.replay_fill = 8, 2, 0, 2, 0
         options.scenarios = "steady,logins,descriptors"
@@ -306,4 +322,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -15,6 +15,7 @@ import os
 import pathlib
 import platform
 import random
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -608,6 +609,17 @@ def html_report(report):
 <h2>Scope</h2><p>""" + html.escape(report["scopeBoundary"]) + "</p>"
 
 
+
+def distinct_loopback_sources_available():
+    """Whether this host routes 127.0.0.2 like 127.0.0.1. Linux answers the whole of 127/8 on lo;
+    macOS configures only 127.0.0.1 on lo0 (others need an `ifconfig lo0 alias`, a system change)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.2", 0))
+        return True
+    except OSError:
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", required=True, type=pathlib.Path)
@@ -620,6 +632,11 @@ def main():
     parser.add_argument("--html", type=pathlib.Path)
     parser.add_argument("--smoke", action="store_true")
     options = parser.parse_args()
+    if not distinct_loopback_sources_available():
+        print("Distinct loopback source addresses (127.0.0.2 and up) are not routed on this host; "
+              "this load model gives every simulated peer its own address, as the server's per-address "
+              "limits require. Not run.")
+        return 77
     if options.smoke:
         options.players, options.workers, options.seconds = 4, 4, .3
         options.scenarios = ("ordinary,signin-storm,refresh-storm,session-churn,directory-pressure,"
