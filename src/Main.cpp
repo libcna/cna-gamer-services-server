@@ -2,6 +2,7 @@
 #include "CnaService/DatabaseLock.hpp"
 #include "CnaService/Listener.hpp"
 #include "CnaService/Protocol.hpp"
+#include "CnaService/Version.hpp"
 #include "CnaService/Store.hpp"
 #include <charconv>
 #include <iostream>
@@ -34,7 +35,7 @@ int main(int argc,char** argv) {
         for(int i=1;i<argc;++i) {
             const std::string argument=argv[i];
             if(argument=="--help"){usage();return 0;}
-            if(argument=="--version"){std::cout<<"cna-gamer-services-server "<<CNA_SERVER_VERSION<<'\n';return 0;}
+            if(argument=="--version"){std::cout<<"cna-gamer-services-server "<<CNA_GAMER_SERVICES_VERSION_STRING<<'\n';return 0;}
         }
         std::map<std::string,std::string> args;bool insecure=false;
         for(int i=1;i<argc;++i) {

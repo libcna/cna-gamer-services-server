@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Listener.hpp"
 #include "CnaService/Service.hpp"
+#include "CnaService/Version.hpp"
 #include "Admission.hpp"
 #include "RelayListener.hpp"
 #include "EventListener.hpp"
@@ -193,7 +194,7 @@ std::string prometheus(const Service::Metrics& metrics,const Admission::Snapshot
                        std::chrono::steady_clock::time_point started) {
     const auto uptime=std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now()-started).count();
     std::ostringstream out;
-    out<<"# HELP cna_build_info Build information.\n# TYPE cna_build_info gauge\ncna_build_info{version=\""<<CNA_SERVER_VERSION<<"\"} 1\n"
+    out<<"# HELP cna_build_info Build information.\n# TYPE cna_build_info gauge\ncna_build_info{version=\""<<CNA_GAMER_SERVICES_VERSION_STRING<<"\"} 1\n"
        <<"# HELP cna_up Whether the process is running.\n# TYPE cna_up gauge\ncna_up 1\n"
        <<"# HELP cna_ready Whether storage is usable at the expected schema.\n# TYPE cna_ready gauge\ncna_ready "<<(metrics.ready?1:0)<<'\n'
        <<"# HELP cna_uptime_seconds Process uptime.\n# TYPE cna_uptime_seconds gauge\ncna_uptime_seconds "<<uptime<<'\n'
@@ -316,7 +317,7 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     net::co_spawn(io,report(service,admission,hub,events,jsonLogging),net::detached);
     if(jsonLogging)std::cout<<Json{{"timestamp",now()},{"level","info"},{"event","service_listening"},
         {"address",address},{"port",acceptor.local_endpoint().port()},{"tls",!insecureLoopback},
-        {"version",CNA_SERVER_VERSION}}.dump()<<std::endl;
+        {"version",CNA_GAMER_SERVICES_VERSION_STRING}}.dump()<<std::endl;
     else std::cout<<"CNA service listening on "<<address<<":"<<acceptor.local_endpoint().port()<<std::endl;
     if(diagnosticsAcceptor) {
         if(jsonLogging)std::cout<<Json{{"timestamp",now()},{"level","info"},{"event","diagnostics_listening"},

@@ -1,6 +1,23 @@
 # SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.25)
 project(cna_gamer_services_server VERSION 0.1.0 LANGUAGES CXX)
+
+# --- Release identity (docs/releasing.md) --------------------------------------------------
+# project(VERSION) accepts numeric components only, so the Semantic Versioning pre-release
+# identifier lives beside it and is joined back on here. Deliberately a normal variable and not
+# a cache entry: the version identifies the release, it is not a per-build knob, and a cached
+# copy would keep an already-configured build directory reporting the previous release after a
+# bump. CNA_GAMER_SERVICES_VERSION_STRING is the single spelling the rest of the build reads --
+# the generated CnaService/Version.hpp and the configure banner. Do not re-derive it elsewhere.
+set(CNA_GAMER_SERVICES_VERSION_PRERELEASE "")
+if(CNA_GAMER_SERVICES_VERSION_PRERELEASE)
+    set(CNA_GAMER_SERVICES_VERSION_STRING "${PROJECT_VERSION}-${CNA_GAMER_SERVICES_VERSION_PRERELEASE}")
+else()
+    set(CNA_GAMER_SERVICES_VERSION_STRING "${PROJECT_VERSION}")
+endif()
+message(STATUS "cna-gamer-services-server: version ${CNA_GAMER_SERVICES_VERSION_STRING}")
+include(cmake/Version.cmake)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenSSL 3.0 REQUIRED)
@@ -55,17 +72,22 @@ configure_file(src/PrivacyMigration.hpp.in generated/PrivacyMigration.hpp @ONLY)
 file(READ migrations/023_friend_voice.sql CNA_FRIEND_VOICE_MIGRATION)
 configure_file(src/FriendVoiceMigration.hpp.in generated/FriendVoiceMigration.hpp @ONLY)
 add_library(cna_service src/Privacy.cpp src/DatabaseLock.cpp src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
-target_include_directories(cna_service PUBLIC include protocol/include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_include_directories(cna_service PUBLIC include protocol/include ${CMAKE_CURRENT_BINARY_DIR}/generated/include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(cna_service PUBLIC OpenSSL::Crypto SQLite::SQLite3 nlohmann_json::nlohmann_json)
 target_compile_options(cna_service PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(cna-gamer-services-server src/Main.cpp src/Admission.cpp src/Listener.cpp src/RelayListener.cpp src/EventListener.cpp src/RelayFlow.cpp src/RelayHub.cpp)
 target_link_libraries(cna-gamer-services-server PRIVATE cna_service OpenSSL::SSL Boost::headers Threads::Threads)
-target_compile_definitions(cna-gamer-services-server PRIVATE CNA_SERVER_VERSION="${PROJECT_VERSION}")
 target_compile_options(cna-gamer-services-server PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(cna-gamer-services-admin src/Admin.cpp)
 target_link_libraries(cna-gamer-services-admin PRIVATE cna_service)
 target_compile_options(cna-gamer-services-admin PRIVATE -Wall -Wextra -Wpedantic -Werror)
 enable_testing()
+# The generated CnaService/Version.hpp agrees with the version CMake configured (docs/releasing.md).
+add_executable(version_tests tests/VersionTests.cpp)
+target_link_libraries(version_tests PRIVATE cna_service)
+target_compile_definitions(version_tests PRIVATE CNA_TEST_EXPECTED_VERSION="${CNA_GAMER_SERVICES_VERSION_STRING}")
+target_compile_options(version_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_version COMMAND version_tests)
 add_executable(service_tests tests/ServiceTests.cpp)
 target_link_libraries(service_tests PRIVATE cna_service)
 target_compile_definitions(service_tests PRIVATE CNA_PROTOCOL_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/protocol/golden/v1.json")
@@ -257,7 +279,7 @@ set_tests_properties(service_admin_web PROPERTIES TIMEOUT 120 LABELS "integratio
 # Stable labels let one maintainer choose an honest qualification cost without remembering a long
 # regular expression. Tests requiring separately-built CNA programs retain exit-77 skip semantics.
 set(CNA_UNIT_TESTS
-    service_unit service_ranked_migration service_privacy service_database_lock service_atomicity
+    service_version service_unit service_ranked_migration service_privacy service_database_lock service_atomicity
     service_directory service_arbitration service_avatars service_avatar_validation service_social
     service_invitations service_relay_protocol service_relay_authorization service_relay_flow
     service_picture_privacy service_numeric_persistence service_admission service_progress_trust
