@@ -80,7 +80,7 @@ supports `--read-only`, and requires explicit remote opt-in plus TLS.
 ## Test and qualify
 
 ```sh
-tools/qualify.sh quick         # build + 19 C++ unit/component suites
+tools/qualify.sh quick         # build + 20 C++ unit/component suites
 tools/qualify.sh normal        # all configured local tests; external CNA tests may skip 77
 tools/qualify.sh security      # persistent ASan/UBSan unit/component build
 tools/qualify.sh performance   # Release legacy benchmark smoke
@@ -90,6 +90,10 @@ tools/qualify.sh full          # all tests + strict offline-documentation build/
 All tiers use ccache. Developer/release tests use at most six jobs and sanitizer tests use one. An
 exit-code-77 CNA harness skip means unavailable, never pass. Configure the external harness
 environment exactly as README describes when CNA builds are available.
+
+Release 0.1.0 evidence on 2026-10-10 (`CHANGELOG.md`): `tools/qualify.sh full` green, 47/47 tests
+with 0 skips using CNA 0.1.0's harnesses and `SDL_VIDEODRIVER=offscreen` (the C++ client's `award`
+step creates a `GraphicsDevice`), and the strict documentation check passing.
 
 Final Linux loopback evidence on 2026-10-07: full qualification configured 46 tests, passed all 29
 applicable tests in 48.86 seconds, explicitly skipped 17 unavailable CNA harness tests and failed

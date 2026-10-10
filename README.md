@@ -48,6 +48,18 @@ through the relay); a store (Marketplace), PartnerToken and title update deliver
 tested server host; Windows and macOS builds are unvalidated. CNA's
 `docs/gamer-services-known-limitations.md` lists every limitation, client and server.
 
+## Version
+
+Current release: **0.1.0** (pre-1.0 — a minor release may still change behaviour; the wire
+protocol stays `v1`; see [`CHANGELOG.md`](CHANGELOG.md) for what the release contains and
+[`docs/releasing.md`](docs/releasing.md) for how versions are managed). A binary reports its own
+version with `cna-gamer-services-server --version`, in `cna_build_info` on `/metrics` and in
+`/readyz`; compiled code reads it from `CnaService::getVersionString()` in
+`CnaService/Version.hpp`, a header the build generates from the one place the version is decided.
+
+The protocol version (`v1`) and a title's `title-minimum-version` are different numbers: the first
+is the wire contract, the second the oldest game build a title accepts.
+
 ## Build and run
 
 Dependencies: OpenSSL >=3, Boost >=1.74 (headers, Beast), SQLite >=3.38, nlohmann/json >=3.11,
@@ -299,8 +311,11 @@ CNA_AVATAR_CATALOGS=$CNA/modules/gamer-services/assets/avatars \
 CTEST_PARALLEL_LEVEL=6 ctest --test-dir build-agent --output-on-failure
 ```
 
-They cover Guide sign-in, social flows, pictures and rich presence through the standard XNA API
-(`service_tls_e2e`); the directory and public `BeginFind` (`service_cna_directory`); raw and owned
+The `award` step of `service_tls_e2e` creates a `GraphicsDevice` to decode an achievement picture,
+and the test removes `DISPLAY` from the harness environment on purpose. A harness from a CNA build
+whose default renderer needs a window (`OPENGLES3`, `VULKAN`, …) therefore needs
+`SDL_VIDEODRIVER=offscreen` in the environment; a `HEADLESS` build needs nothing. They cover Guide sign-in, social flows, pictures and rich
+presence through the standard XNA API (`service_tls_e2e`); the directory and public `BeginFind` (`service_cna_directory`); raw and owned
 ENet over the relay (`service_cna_relay`, `service_cna_owned_enet`); the public NetworkSession
 lifecycle for PlayerMatch and Ranked (`service_cna_session`), invitations (`service_cna_invite`),
 service restart mid-session (`service_cna_session_restart`), host migration and host crash
