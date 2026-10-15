@@ -3,11 +3,15 @@
 #include "CnaService/Protocol.hpp"
 #include <array>
 #include <cstddef>
+#include <set>
+#include <string>
 #include <string_view>
 
 namespace CnaService {
 /** @brief Joints in the CNA avatar rig (XNA's avatar skeleton). */
 inline constexpr std::size_t AvatarJointCount=71;
+/** @brief Face shape parameters a description can carry (16 from format 2, 32 from format 3). */
+inline constexpr int FaceParameterCount=32;
 
 /** @brief What an accepted avatar GLB contains, for catalog-level checks. */
 struct AvatarGlbSummary {
@@ -17,12 +21,15 @@ struct AvatarGlbSummary {
     std::size_t primitives=0;
     /** @brief Animations. */
     std::size_t animations=0;
+    /** @brief Catalog textures its materials share by name (material extra cnaTexture). */
+    std::set<std::string> textures;
 };
 
 /** @brief Validates a GLB against the avatar contract CNA clients enforce: one embedded buffer, the
  * 71-joint rig in its exact topology with identity bind rotations, skinned triangle primitives with
  * only POSITION/NORMAL/TEXCOORD_0/JOINTS_0/WEIGHTS_0, in-range indices and weights, embedded PNG
- * base-colour textures, CNA material extras, cubic-spline joint animations and bounded sizes.
+ * base-colour textures or one shared catalog texture by name, CNA material extras (tint, feature,
+ * layer, specular, side, blend), cubic-spline joint animations and bounded sizes.
  * @param bytes GLB. @return Summary. @throws Error INVALID_ARGUMENT otherwise. */
 AvatarGlbSummary validateAvatarGlb(std::string_view bytes);
 
@@ -31,7 +38,8 @@ AvatarGlbSummary validateAvatarGlb(std::string_view bytes);
  * @throws Error INVALID_ARGUMENT otherwise. */
 void validateFaceAtlas(std::string_view png,const Json& layout);
 
-/** @brief Validates a manifest's faceControls (bounded deformers per body type).
+/** @brief Validates a manifest's faceControls (bounded deformers per body type, parameters below
+ * FaceParameterCount).
  * @param controls Value of "faceControls". @throws Error INVALID_ARGUMENT otherwise. */
 void validateFaceControls(const Json& controls);
 }

@@ -28,6 +28,7 @@
 #include "PrivacyMigration.hpp"
 #include "FriendVoiceMigration.hpp"
 #include "AvatarBaselineMigration.hpp"
+#include "AvatarRevisionMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -143,6 +144,7 @@ Store::Store(const std::string& path) {
         if(current<22){exec("BEGIN IMMEDIATE");exec(PrivacyMigration);exec("COMMIT");}
         if(current<23){exec("BEGIN IMMEDIATE");exec(FriendVoiceMigration);exec("COMMIT");}
         if(current<24){exec("BEGIN IMMEDIATE");exec(AvatarBaselineMigration);exec("COMMIT");}
+        if(current<25){exec("BEGIN IMMEDIATE");exec(AvatarRevisionMigration);exec("COMMIT");}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

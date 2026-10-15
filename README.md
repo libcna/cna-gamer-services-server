@@ -344,7 +344,10 @@ but has not been independently qualified between genuinely remote networks.
 Import each catalog CNA ships, then give accounts avatars. CNA's catalog v3 is the baseline and,
 today, its only catalog; a later catalog is imported after it. Catalogs 1 and 2 were CNA development
 catalogs: the service refuses them, and schema 24 removes them and the avatars naming them from an
-upgraded database.
+upgraded database. Catalog v3 revision 2 (CNA's larger wardrobe, ears, eyebrows, makeup and
+accessories, named by description format 3) is imported with the same command over revision 1;
+every revision 1 avatar stays valid, and clients that read only formats 1 and 2 are served copies
+they can read.
 
 ```sh
 build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v3

@@ -111,8 +111,11 @@ def main():
                 assert lines.get("avatar-lookup", "").startswith("valid=1 body=0 "), lines
                 assert lines.get("avatar-none") == "valid=0 body=0 height=0 catalog=0", lines
                 assert lines.get("avatar-ready") == "substituted=0 unavailable=0", lines
-                # The avatar editor's save: an edit on the newest catalog, stored and read back.
-                assert lines.get("avatar-edit") == "saved=1 format=2", lines
+                # The avatar editor's save: an edit on the newest catalog, stored and read back (the
+                # second run edits the format 3 avatar the first run saved).
+                assert lines.get("avatar-edit") == "saved=1 format=%d" % (2 if attempt == "first" else 3), lines
+                # And what only description format 3 says (catalog v3 revision 2): ears and an earring.
+                assert lines.get("avatar-edit3") == "saved=1 format=3", lines
                 # One installed, self-contained pack; nothing in the per-file asset cache; no staging left.
                 record = json.loads((pack / "pack.json").read_text())
                 assert record["version"] == target and record["packFormat"] == 1, record
@@ -139,7 +142,7 @@ def main():
     print("Standard XNA avatars over the CNA service: CNA's catalogs imported from the baseline v3, development "
           "catalogs refused; a format 2 avatar on catalog v%d; "
           "own/looked-up/absent descriptions; the missing catalog installed as one pack and reused; a declining "
-          "client drawing the projection; an editor save stored through avatars.set." % target)
+          "client drawing the projection; editor saves (formats 2 and 3) stored through avatars.set." % target)
     return 0
 
 

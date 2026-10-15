@@ -11,6 +11,24 @@ move with releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Avatar description format 3 and catalog revisions** (CNA catalog v3 revision 2). Format 3
+  keeps format 2 and adds eyebrows, ears, earrings, wristwear, gloves and rings (each with a side),
+  eye shadow, eyeliner, blush and lips, five more colours, a proportion byte and a second block of
+  sixteen face bytes (layout in `protocol/v1.md`). Every description must be canonical: exactly
+  the lowest format that says everything it says, counting the item formats the catalog declares.
+  `avatars.get` serves a reader of formats 1 or 2 a copy it can read (`projectAvatarDescription`);
+  stored avatars never change. A catalog version may be re-imported as a higher `revision` of the
+  newest catalog that keeps every item's id, slot and format; the running service picks it up.
+  Imports accept contract level (`reader`) 2: item kinds 7-16 and face styles, shared catalog
+  textures (`cnaTexture`), per-side parts, alpha-blended parts, hat `hairCover`, `follow`, `hides`,
+  32 face controls, anchors, a head surface, outfits and face presets, up to 1,024 files and
+  manifests up to 1 MiB.
+- `avatars.catalog` also returns `manifestSha256` and `manifestSize`, and leaves the manifest out
+  when the caller passes `manifest: false` or it does not fit a message (it is then read by hash
+  from the file route). `avatars.get` honours `reader` without a catalog list.
+
 ### Changed
 
 - **Avatar catalog v3 is the baseline.** The service accepts avatar catalog versions 3 and later
@@ -19,6 +37,8 @@ move with releases.
   `avatars.catalogPack` (INVALID_ARGUMENT), and ignored in an `avatars.get` catalog list. A later
   catalog is imported only once the baseline is, and keeps every earlier item id in its slot.
   Description formats 1 and 2 are unchanged.
+- **Schema 25** adds a catalog `revision` and every catalog item's lowest description `format`
+  (existing catalogs are revision 1, their items format 1) and allows item slots 7-16.
 - **Schema 24** removes catalog 1 and 2 state from an upgraded database: avatars naming those
   catalogs (the accounts keep everything else), their items, file links and manifests. Shared
   content-addressed files are kept. Triggers refuse such rows in fresh and upgraded databases.

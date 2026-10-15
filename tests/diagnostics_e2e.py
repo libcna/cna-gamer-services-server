@@ -68,7 +68,7 @@ def main():
             status, _, body = open_url(diagnostics_url + "/readyz")
             readiness = json.loads(body)
             check(status == 200 and readiness["status"] == "ready" and
-                  readiness["schemaVersion"] == readiness["expectedSchemaVersion"] == 24, "readiness response")
+                  readiness["schemaVersion"] == readiness["expectedSchemaVersion"] == 25, "readiness response")
 
             _, _, body = open_url(service_url, envelope("hello"))
             check(json.loads(body)["error"] == "OK", "hello request")
@@ -91,7 +91,7 @@ def main():
             status, content_type, metrics = open_url(diagnostics_url + "/metrics")
             check(status == 200 and content_type == "text/plain", "Prometheus response")
             for sample in (
-                "cna_up 1", "cna_ready 1", "cna_schema_version 24", "cna_titles 1", "cna_accounts 1",
+                "cna_up 1", "cna_ready 1", "cna_schema_version 25", "cna_titles 1", "cna_accounts 1",
                 'cna_operations_total{operation="hello"} 1',
                 'cna_operations_total{operation="unknown"} 1',
                 'cna_operations_total{operation="invalid"} 1',

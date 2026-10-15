@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <set>
 #include <iostream>
 #include <sstream>
 
@@ -130,6 +131,27 @@ int main()
         refuseMutation("unknown tint",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaTint"]="neon";});
         refuseMutation("unknown feature",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaFeature"]="nose";});
         refuseMutation("bad layer",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaLayer"]=4;});
+        // Catalog v3 revision 2's extras: makeup and jewellery tints and features, a side, alpha
+        // blending, and a texture the catalog shares by name.
+        for(const auto* tint:{"lips","eyeShadow","blush","jewelry","gloves"}) {
+            auto g=Fixtures::avatarGlb("tint");g.json["materials"][0]["extras"]["cnaTint"]=tint;
+            check(!refused([&]{(void)validateAvatarGlb(g.build());}),std::string("tint ")+tint);
+        }
+        for(const auto* feature:{"lips","shadowLeft","shadowRight","linerLeft","linerRight","blushLeft","blushRight"}) {
+            auto g=Fixtures::avatarGlb("feature");g.json["materials"][0]["extras"]["cnaFeature"]=feature;
+            check(!refused([&]{(void)validateAvatarGlb(g.build());}),std::string("feature ")+feature);
+        }
+        {
+            auto g=Fixtures::avatarGlb("shared");
+            g.json["materials"][0]["extras"]={{"cnaTint","jewelry"},{"cnaSide","right"},{"cnaBlend","alpha"},{"cnaTexture","metal_gold.png"}};
+            const auto summary=validateAvatarGlb(g.build());
+            check(summary.textures==std::set<std::string>{"metal_gold.png"},"shared textures are reported for the manifest check");
+        }
+        refuseMutation("unknown side",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaSide"]="middle";});
+        refuseMutation("unknown blend",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaBlend"]="add";});
+        refuseMutation("a blended face feature",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaBlend"]="alpha";g.json["materials"][0]["extras"]["cnaFeature"]="mouth";});
+        refuseMutation("shared texture path",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaTexture"]="../x.png";});
+        refuseMutation("shared texture that is no PNG",[](GlbParts& g){g.json["materials"][0]["extras"]["cnaTexture"]="x.glb";});
         refuseMutation("texture that is not a PNG",[](GlbParts& g){
             const auto view=g.view("not a png at all, just some bytes....");
             g.json["images"]=Json::array({Json{{"bufferView",view},{"mimeType","image/png"}}});
@@ -144,6 +166,14 @@ int main()
             g.json["images"]=Json::array({Json{{"bufferView",view},{"mimeType","image/png"}}});
             g.json["textures"]=Json::array({Json{{"source",0}}});
             g.json["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]={{"index",0}};
+            Fixtures::finish(g);
+        });
+        refuseMutation("an embedded and a shared texture",[](GlbParts& g){
+            const auto view=g.view(Fixtures::atlasPng());
+            g.json["images"]=Json::array({Json{{"bufferView",view},{"mimeType","image/png"}}});
+            g.json["textures"]=Json::array({Json{{"source",0}}});
+            g.json["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]={{"index",0}};
+            g.json["materials"][0]["extras"]["cnaTexture"]="fabric.png";
             Fixtures::finish(g);
         });
         // Animations.
@@ -174,7 +204,9 @@ int main()
             return refused([&]{validateFaceControls(Json{{"female",{c}},{"male",{control}}});});
         };
         check(badControl([](Json& c){c["ops"][0]["scale"]={9.0,1.0,1.0};}),"scale out of range");
-        check(badControl([](Json& c){c["parameter"]=16;}),"parameter out of range");
+        check(!badControl([](Json& c){c["parameter"]=31;c["name"]="eyeShape";}),"format 3's second face block has controls");
+        check(badControl([](Json& c){c["parameter"]=32;}),"parameter out of range");
+        check(badControl([](Json& c){c["name"]=std::string(33,'n');}),"control name length");
         check(badControl([](Json& c){c["scope"]="body";}),"unknown scope");
         check(badControl([](Json& c){c["ops"][0]["radii"]={0.0,0.05,0.05};}),"degenerate radius");
         check(badControl([](Json& c){c["ops"][0].erase("scale");c["ops"][0]["rotate"]={0,0,1};c["ops"][0]["degrees"]=180;}),"rotation too large");
@@ -245,7 +277,7 @@ int main()
             const auto baseline=std::filesystem::path(root)/("v"+std::to_string(BaseCatalogVersion));
             for(int legacy:{1,2}) {
                 // CNA's real catalog relabelled as a development catalog is still refused.
-                auto relabelled=parse(slurp(baseline/"catalog.json"));
+                auto relabelled=parseAvatarManifest(slurp(baseline/"catalog.json"));
                 relabelled["catalogVersion"]=legacy;
                 const auto files=catalogFiles(baseline);
                 check(refused([&]{(void)importAvatarCatalog(store,relabelled.dump(),files);}),"CNA's catalog relabelled as v"+std::to_string(legacy));
@@ -257,10 +289,16 @@ int main()
                 ++imported;
             }
             check(imported>=1,"CNA's baseline catalog v3 found");
+            // Random avatars are canonical, and so are the copies older readers get.
+            const auto newest=catalogInfo(store.db(),BaseCatalogVersion+imported-1);
             for(int round=0;round<40;++round) {
                 const auto random=randomAvatarDescription(store.db(),round%2);
                 validateAvatarDescription(store.db(),random);
-                validateAvatarDescription(store.db(),formatOneDescription(random));
+                for(int format=1;format<=NewestDescriptionFormat;++format) {
+                    const auto copy=projectAvatarDescription(random,newest,format);
+                    validateAvatarDescription(store.db(),copy);
+                    check(static_cast<unsigned char>(copy[0])<=format,"a copy a reader of format "+std::to_string(format)+" reads");
+                }
             }
             std::cout<<"golden: "<<imported<<" CNA catalogs imported\n";
             for(const auto* suffix:{"","-wal","-shm"})std::filesystem::remove(golden.string()+suffix);

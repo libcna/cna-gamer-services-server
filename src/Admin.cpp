@@ -31,9 +31,9 @@ int main(int argc,char** argv) {
             const std::filesystem::path directory(argv[3]);
             std::ifstream manifestFile(directory/"catalog.json",std::ios::binary);if(!manifestFile)throw CnaService::Error("NOT_FOUND");
             const std::string manifest((std::istreambuf_iterator<char>(manifestFile)),{});
-            if(manifest.size()>1048576)throw CnaService::Error("LIMIT_EXCEEDED");
+            if(manifest.size()>CnaService::MaximumManifestBytes)throw CnaService::Error("LIMIT_EXCEEDED");
             std::map<std::string,std::string> files;
-            const auto parsed=CnaService::parse(manifest);
+            const auto parsed=CnaService::parseAvatarManifest(manifest);
             for(const auto& entry:parsed.at("assets")) {
                 const auto name=CnaService::stringField(entry,"name",64);
                 if(name.find('/')!=std::string::npos||name.find("..")!=std::string::npos)throw CnaService::Error("INVALID_ARGUMENT");

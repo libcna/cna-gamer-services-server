@@ -30,8 +30,10 @@ constexpr std::array<std::string_view,AvatarJointCount> Names{
     "FingerThumb2Right", "FingerIndex3Left", "FingerMiddle3Left", "FingerRing3Left", "FingerSmall3Left",
     "FingerThumb3Left", "FingerIndex3Right", "FingerMiddle3Right", "FingerRing3Right", "FingerSmall3Right",
     "FingerThumb3Right"};
-constexpr std::array<std::string_view,8> Tints{"none","skin","hair","eyes","top","bottom","shoes","accessory"};
-constexpr std::array<std::string_view,5> Features{"eyeLeft","eyeRight","eyebrowLeft","eyebrowRight","mouth"};
+constexpr std::array<std::string_view,13> Tints{"none","skin","hair","eyes","top","bottom","shoes","accessory","lips","eyeShadow",
+    "blush","jewelry","gloves"};
+constexpr std::array<std::string_view,12> Features{"eyeLeft","eyeRight","eyebrowLeft","eyebrowRight","mouth","lips","shadowLeft",
+    "shadowRight","linerLeft","linerRight","blushLeft","blushRight"};
 constexpr std::array<std::string_view,14> Eyes{"Neutral","Sad","Angry","Confused","Laughing","Shocked","Happy",
     "Yawning","Sleeping","LookUp","LookDown","LookLeft","LookRight","Blink"};
 constexpr std::array<std::string_view,5> Eyebrows{"Neutral","Sad","Angry","Confused","Raised"};
@@ -160,7 +162,7 @@ void checkPng(std::string_view png)
     require(be32(png,16)>=1&&be32(png,16)<=2048&&be32(png,20)>=1&&be32(png,20)<=2048);
 }
 
-void checkMaterial(const Glb& glb,std::size_t materialIndex)
+void checkMaterial(const Glb& glb,std::size_t materialIndex,AvatarGlbSummary& summary)
 {
     const auto& materials=glb.array("materials");
     require(materialIndex<materials.size());
@@ -169,7 +171,19 @@ void checkMaterial(const Glb& glb,std::size_t materialIndex)
     require(extras.is_object());
     const auto tint=extras.value("cnaTint",std::string("none"));
     require(std::ranges::find(Tints,tint)!=Tints.end());
-    if(extras.contains("cnaFeature"))require(std::ranges::find(Features,extras["cnaFeature"].get<std::string>())!=Features.end());
+    const bool feature=extras.contains("cnaFeature");
+    if(feature)require(std::ranges::find(Features,extras["cnaFeature"].get<std::string>())!=Features.end());
+    // Drawn on one side of the body only (an earring or a ring), alpha-blended (stubble), or with a
+    // texture the catalog shares among models, named here and listed by the manifest.
+    if(extras.contains("cnaSide"))require(extras["cnaSide"]=="left"||extras["cnaSide"]=="right");
+    if(extras.contains("cnaBlend"))require(extras["cnaBlend"]=="alpha"&&!feature);
+    const bool shared=extras.contains("cnaTexture");
+    if(shared) {
+        const auto name=extras["cnaTexture"].get<std::string>();
+        require(!name.empty()&&name.size()<=64&&name.front()!='.'&&name.ends_with(".png")&&
+                std::ranges::all_of(name,[](char c){return (c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='.'||c=='-';}));
+        summary.textures.insert(name);
+    }
     const int layer=extras.value("cnaLayer",0);
     require(layer==0||layer==1);
     if(extras.contains("cnaSpecular")) {
@@ -184,6 +198,7 @@ void checkMaterial(const Glb& glb,std::size_t materialIndex)
         for(const auto& c:factor)require(c.is_number()&&std::isfinite(c.get<float>()));
     }
     if(pbr.contains("baseColorTexture")) {
+        require(!shared);
         const auto& textures=glb.array("textures");
         const auto texture=index(pbr["baseColorTexture"],"index",textures.size());
         const auto& images=glb.array("images");
@@ -295,7 +310,7 @@ AvatarGlbSummary validateAvatarGlb(std::string_view bytes)
                 const auto indices=glb.floats(indexAccessor,"SCALAR",MaximumIndices,indexCount);
                 require(indexCount%3==0&&std::ranges::all_of(indices,[&](float i){return i<static_cast<float>(count);}));
                 require(p.contains("material"));
-                checkMaterial(glb,p["material"].get<std::size_t>());
+                checkMaterial(glb,p["material"].get<std::size_t>(),summary);
             }
         }
         // Animations: cubic-spline joint curves with keyed expressions.
@@ -381,10 +396,11 @@ void validateFaceControls(const Json& controls)
         };
         for(const auto* body:{"female","male"}) {
             const auto& list=controls.at(body);
-            require(list.is_array()&&list.size()<=32);
+            require(list.is_array()&&list.size()<=static_cast<std::size_t>(2*FaceParameterCount));
             for(const auto& control:list) {
                 const int parameter=control.at("parameter").get<int>();
-                require(parameter>=0&&parameter<16);
+                require(parameter>=0&&parameter<FaceParameterCount);
+                if(control.contains("name"))require(control["name"].get<std::string>().size()<=32);
                 const auto scope=control.at("scope").get<std::string>();
                 require(scope=="face"||scope=="head");
                 const auto& ops=control.at("ops");
