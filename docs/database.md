@@ -17,7 +17,7 @@ authorities.
 
 ## Schema and migrations
 
-`PRAGMA user_version` is the schema identity. The current version is 23. `Store::Store` refuses a
+`PRAGMA user_version` is the schema identity. The current version is 24. `Store::Store` refuses a
 larger value with `UNSUPPORTED_DATABASE_VERSION`. It applies every missing migration in numerical
 order; each migration has its own `BEGIN IMMEDIATE` transaction and sets its exact version before
 commit. If migration N fails, N rolls back and previously committed migrations remain valid; the

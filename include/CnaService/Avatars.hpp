@@ -11,19 +11,33 @@
 namespace CnaService {
 /** @brief Length of every avatar description. */
 inline constexpr std::size_t AvatarDescriptionSize=1021;
+/** @brief The baseline avatar catalog, CNA's catalog v3: the oldest catalog version the service
+ * accepts. Versions below it were CNA development catalogs; no catalog, pack or description naming
+ * one is ever accepted. Later versions are future immutable catalogs that grow from it. */
+inline constexpr long long BaseCatalogVersion=3;
+/** @brief The highest catalog version a description can encode (16 bits). */
+inline constexpr long long MaximumCatalogVersion=65535;
+/** @brief Whether a catalog version can be supported at all: the baseline or a later version.
+ * @param version Catalog version. @return False below the baseline or past 16 bits. */
+constexpr bool supportedCatalogVersion(long long version)
+{
+    return version>=BaseCatalogVersion&&version<=MaximumCatalogVersion;
+}
 /** @brief IEEE CRC-32. @param bytes Input. @return Checksum. */
 std::uint32_t crc32(std::string_view bytes);
-/** @brief Accepts only a CNA format 1 or 2 description whose catalog version, items and facial hair
- * were imported here (format 2 must use facial hair or a face shape).
+/** @brief Accepts only a CNA format 1 or 2 description whose catalog version is supported and was
+ * imported here, and whose items and facial hair are that catalog's (format 2 must use facial hair
+ * or a face shape).
  * @param db Database. @param description Raw bytes. @throws Error INVALID_ARGUMENT otherwise. */
 void validateAvatarDescription(sqlite3* db,std::string_view description);
 /** @brief The format 1 copy of a description for clients that read only format 1: format 2's facial
  * hair and face shape dropped, everything else kept. @param description Stored bytes. @return Bytes. */
 std::string formatOneDescription(std::string_view description);
-/** @brief Imports an avatar catalog: validates the manifest, every file's hash and size, every model
- * against the CNA avatar contract (AvatarAssets.hpp), that every item fits its body, the face atlas
- * layout and face controls, and that no earlier item disappears or changes slot. Re-importing the
- * identical catalog is a no-op.
+/** @brief Imports an avatar catalog: validates the manifest, a supported catalog version (the
+ * baseline first, a later version only once the baseline is here), every file's hash and size, every
+ * model against the CNA avatar contract (AvatarAssets.hpp), that every item fits its body, the face
+ * atlas layout and face controls, and that no earlier item disappears or changes slot. Re-importing
+ * the identical catalog is a no-op.
  * @param store Store. @param manifest catalog.json text. @param files Asset bytes by name.
  * @return Imported catalog version. */
 int importAvatarCatalog(Store& store,std::string_view manifest,const std::map<std::string,std::string>& files);
@@ -51,7 +65,7 @@ struct CatalogInfo {
     std::map<long long,int> items;
 };
 /** @brief Reads one imported catalog's facts. @param db Database. @param version Version.
- * @return Facts. @throws Error NOT_FOUND. */
+ * @return Facts. @throws Error NOT_FOUND, always for a version below the baseline. */
 CatalogInfo catalogInfo(sqlite3* db,long long version);
 /** @brief The pack descriptor avatars.catalogPack returns. @param info Catalog. @return Descriptor. */
 Json catalogPack(const CatalogInfo& info);

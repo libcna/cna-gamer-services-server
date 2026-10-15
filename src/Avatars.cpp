@@ -79,7 +79,9 @@ void validateAvatarDescription(sqlite3* db,std::string_view d)
     std::uint32_t stored=0;
     for(int i=3;i>=0;--i)stored=(stored<<8)|static_cast<unsigned char>(d[ChecksumOffset+i]);
     if(stored!=crc32(d.substr(0,ChecksumOffset)))throw Error("INVALID_ARGUMENT");
+    // A development catalog below the baseline is refused even before the catalog table is asked.
     const long long version=read16(d,CatalogOffset);
+    if(!supportedCatalogVersion(version))throw Error("INVALID_ARGUMENT");
     Statement catalog(db,"SELECT 1 FROM avatar_catalogs WHERE version=?");catalog.bind(1,version);
     if(!catalog.row())throw Error("INVALID_ARGUMENT");
     auto slotOf=[&](long long id) {
@@ -120,7 +122,8 @@ int importAvatarCatalog(Store& store,std::string_view text,const std::map<std::s
     const auto manifest=parse(text);
     if(!manifest.is_object()||manifest.value("format",0)!=1||manifest.value("rig",std::string())!="cna-avatar-71")
         throw Error("INVALID_ARGUMENT");
-    const auto version=integerField(manifest,"catalogVersion",1,65535);
+    // Catalogs 1 and 2 were CNA development catalogs: never imported.
+    const auto version=integerField(manifest,"catalogVersion",BaseCatalogVersion,MaximumCatalogVersion);
     // The contract level these checks enforce; a catalog for newer readers needs a newer service.
     if(manifest.contains("reader")&&integerField(manifest,"reader",1,1)!=1)throw Error("INVALID_ARGUMENT");
     if(!manifest.contains("assets")||!manifest["assets"].is_array()||manifest["assets"].empty()||manifest["assets"].size()>256)
@@ -218,7 +221,12 @@ int storeCatalog(Store& store,const Json& manifest,long long version,const std::
             if(existing.text(0)!=canonical)throw Error("CONFLICT");
             return static_cast<int>(version);
         }
-        // Catalogs only grow: every item of the newest earlier catalog keeps its id and slot.
+        // Catalogs grow from the baseline: a later version needs the baseline imported first, and
+        // every item of the newest earlier catalog keeps its id and slot.
+        if(version>BaseCatalogVersion) {
+            Statement baseline(store.db(),"SELECT 1 FROM avatar_catalogs WHERE version=?");baseline.bind(1,BaseCatalogVersion);
+            if(!baseline.row())throw Error("INVALID_ARGUMENT");
+        }
         Statement previous(store.db(),"SELECT id,slot FROM avatar_catalog_items WHERE version=(SELECT MAX(version) FROM avatar_catalogs WHERE version<?)");
         previous.bind(1,version);
         while(previous.row()) {
@@ -315,6 +323,7 @@ std::string randomAvatarDescription(sqlite3* db,std::optional<int> bodyType)
 
 CatalogInfo catalogInfo(sqlite3* db,long long version)
 {
+    if(!supportedCatalogVersion(version))throw Error("NOT_FOUND");
     Statement row(db,"SELECT manifest FROM avatar_catalogs WHERE version=?");row.bind(1,version);
     if(!row.row())throw Error("NOT_FOUND");
     CatalogInfo info;
@@ -460,9 +469,12 @@ Json Service::avatars(const std::string& user,const std::string& op,const Json& 
         if(negotiated) {
             if(!a["catalogs"].is_array()||a["catalogs"].empty()||a["catalogs"].size()>64)throw Error("INVALID_ARGUMENT");
             for(const auto& version:a["catalogs"]) {
-                if(!version.is_number_integer()||version.get<long long>()<1||version.get<long long>()>65535)throw Error("INVALID_ARGUMENT");
-                catalogs.insert(version.get<long long>());
+                if(!version.is_number_integer()||version.get<long long>()<1||version.get<long long>()>MaximumCatalogVersion)throw Error("INVALID_ARGUMENT");
+                // A development catalog below the baseline names nothing this service has or will
+                // ever have; a client draws avatars only from supported catalogs it lists.
+                if(supportedCatalogVersion(version.get<long long>()))catalogs.insert(version.get<long long>());
             }
+            if(catalogs.empty())throw Error("INVALID_ARGUMENT");
             if(!a.contains("catalogUpdates")||!a["catalogUpdates"].is_boolean())throw Error("INVALID_ARGUMENT");
             updates=a["catalogUpdates"].get<bool>();
             maxBytes=integerField(a,"maxCatalogBytes",0,1LL<<40);
@@ -504,7 +516,7 @@ Json Service::avatars(const std::string& user,const std::string& op,const Json& 
         return Json{{"avatars",avatars}};
     }
     if(op=="avatars.catalogPack") {
-        return catalogPack(catalog(integerField(a,"version",1,65535)));
+        return catalogPack(catalog(integerField(a,"version",BaseCatalogVersion,MaximumCatalogVersion)));
     }
     if(op=="avatars.set") {
         const auto description=hexDecode(stringField(a,"description",AvatarDescriptionSize*2));
@@ -515,7 +527,8 @@ Json Service::avatars(const std::string& user,const std::string& op,const Json& 
     }
     // avatars.catalog: the requested (or newest) imported catalog manifest.
     long long version=0;
-    if(a.contains("version"))version=integerField(a,"version",0,65535);
+    if(a.contains("version"))version=integerField(a,"version",0,MaximumCatalogVersion);
+    if(version!=0&&!supportedCatalogVersion(version))throw Error("INVALID_ARGUMENT");
     Statement catalog(store_.db(),version?"SELECT version,manifest FROM avatar_catalogs WHERE version=?":
         "SELECT version,manifest FROM avatar_catalogs ORDER BY version DESC LIMIT 1");
     if(version)catalog.bind(1,version);

@@ -108,7 +108,7 @@ server and never prints a credential. Passwords and JSON documents come from std
 | `asset <title> <mime> <file>` | Imports a PNG (<=512x512, <=512 KiB) or GLB (<=16 MiB); prints its hash |
 | `privilege <username> <name> <value>` | Sets an XNA `GamerPrivileges` value for an account, the operator's stand-in for parental controls: `communication`, `profileViewing` or `userContent` to `everyone`, `friends` or `blocked`; `trade`, `purchase` or `premium` to `allowed` or `blocked`. It reaches the player at their next sign-in, and the service enforces it at once (`protocol/v1.md`, Privacy) |
 | `picture <username> <hash>` | Sets a gamer picture |
-| `avatar-catalog <directory>` | Imports and fully validates a CNA avatar catalog (`assets/avatars/v1`, `v2`, `v3`) |
+| `avatar-catalog <directory>` | Imports and fully validates a CNA avatar catalog (`assets/avatars/v3`, the baseline; later versions after it) |
 | `avatar <username> random [male\|female]`, `clear` or `set` | Gives an account an avatar (`set` reads the description hex from stdin) |
 | `game-defaults <username>` | Sets the account's XNA GameDefaults, JSON on stdin |
 | `inspect` / `inspect-online <title>` | Counts only: users, titles, sessions, earned; directory, invitations, relay records |
@@ -341,11 +341,12 @@ but has not been independently qualified between genuinely remote networks.
 
 ### Avatars
 
-Import each catalog CNA ships, then give accounts avatars:
+Import each catalog CNA ships, then give accounts avatars. CNA's catalog v3 is the baseline and,
+today, its only catalog; a later catalog is imported after it. Catalogs 1 and 2 were CNA development
+catalogs: the service refuses them, and schema 24 removes them and the avatars naming them from an
+upgraded database.
 
 ```sh
-build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v1
-build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v2
 build/cna-gamer-services-admin service.sqlite3 avatar-catalog $CNA/modules/gamer-services/assets/avatars/v3
 build/cna-gamer-services-admin service.sqlite3 avatar alice random male
 ```

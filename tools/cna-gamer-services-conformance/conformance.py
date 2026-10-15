@@ -465,7 +465,12 @@ class Suite:
             "accounts without avatars did not return the documented null representation",
         )
         self.client.expect("avatars.catalog", "NOT_FOUND", {}, alice["token"])
-        self.client.expect("avatars.catalogPack", "NOT_FOUND", {"version": 1}, alice["token"])
+        # Catalog v3 is the baseline: the baseline and later versions may be absent, while the
+        # development catalogs 1 and 2 are not catalog versions the service accepts at all.
+        self.client.expect("avatars.catalogPack", "NOT_FOUND", {"version": 3}, alice["token"])
+        for legacy in (1, 2):
+            self.client.expect("avatars.catalogPack", "INVALID_ARGUMENT", {"version": legacy}, alice["token"])
+            self.client.expect("avatars.catalog", "INVALID_ARGUMENT", {"version": legacy}, alice["token"])
         self.client.expect("avatars.set", "INVALID_ARGUMENT", {"description": "00" * 1021}, alice["token"])
 
     def session_and_invitation(self) -> None:

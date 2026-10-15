@@ -110,7 +110,7 @@ def main():
         )
         check(restore_result.returncode == 0, "restore: " + restore_result.stderr)
         restored_report = json.loads(restore_result.stdout)
-        check(restored_report["schemaVersion"] == 23 and restored_report["restoredIntegrity"] == "ok", "restore validation")
+        check(restored_report["schemaVersion"] == 24 and restored_report["restoredIntegrity"] == "ok", "restore validation")
 
         process, url = start(build, restored, certificate, key)
         try:

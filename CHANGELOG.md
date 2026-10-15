@@ -11,6 +11,18 @@ move with releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **Avatar catalog v3 is the baseline.** The service accepts avatar catalog versions 3 and later
+  only (`BaseCatalogVersion`): catalogs 1 and 2 were CNA development catalogs and are refused by
+  `avatar-catalog` import, `avatars.set`, administration, `avatars.catalog` and
+  `avatars.catalogPack` (INVALID_ARGUMENT), and ignored in an `avatars.get` catalog list. A later
+  catalog is imported only once the baseline is, and keeps every earlier item id in its slot.
+  Description formats 1 and 2 are unchanged.
+- **Schema 24** removes catalog 1 and 2 state from an upgraded database: avatars naming those
+  catalogs (the accounts keep everything else), their items, file links and manifests. Shared
+  content-addressed files are kept. Triggers refuse such rows in fresh and upgraded databases.
+
 ## [0.1.0] — 2026-10-10
 
 First tagged release. The server has been developed since 2026-09-28 and has declared 0.1.0 in

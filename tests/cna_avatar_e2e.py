@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 """A CNA process reads and renders service avatars with the standard XNA API.
 
-The service imports every catalog CNA embeds (v1, v2, ...) and one newer catalog the client does
-not have: the newest plus one extra hat. Alice's avatar is a format 2 description (facial hair and
+The service imports the catalogs CNA ships (the baseline v3, and any later one) and one newer
+catalog the client does not have: the newest plus one extra hat. CNA's baseline relabelled as a
+development catalog (1 or 2) is refused. Alice's avatar is a format 2 description (facial hair and
 a shaped face) wearing that hat. Her CNA client installs that catalog as one pack -- only the
 files it lacks cross the wire, through the binary file route, verified, validated and activated
 at once -- and renders her avatar without substituting anything; a later run uses the installed
@@ -39,7 +40,8 @@ def main():
         return 77
     catalogs = pathlib.Path(catalogs)
     versions = sorted(int(p.name[1:]) for p in catalogs.glob("v*") if (p / "catalog.json").is_file())
-    assert pathlib.Path(client).is_file() and versions and versions == list(range(1, len(versions) + 1)), "CNA inputs"
+    # Catalog v3 is the baseline: CNA ships it and later versions, never a development catalog.
+    assert pathlib.Path(client).is_file() and versions and versions == list(range(3, 3 + len(versions))), "CNA inputs"
     newest = catalogs / ("v%d" % versions[-1])
     with tempfile.TemporaryDirectory(prefix="cna-avatars-", dir=build) as temp:
         root = pathlib.Path(temp); os.chmod(root, 0o700)
@@ -53,6 +55,14 @@ def main():
         run("title", "one", "One")
         for user in ("alice", "bob", "charlie"):
             run("user", user, user.title(), text=user + "-password\n")
+        for legacy in (1, 2):
+            relabelled = root / ("catalog-v%d" % legacy); shutil.copytree(catalogs / "v3", relabelled)
+            text = json.loads((relabelled / "catalog.json").read_text()); text["catalogVersion"] = legacy
+            (relabelled / "catalog.json").write_text(json.dumps(text))
+            refused = subprocess.run([admin, str(db), "avatar-catalog", str(relabelled)], stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+            assert refused.returncode != 0, "development catalog %d refused" % legacy
+            shutil.rmtree(relabelled)
         for version in versions:
             assert run("avatar-catalog", str(catalogs / ("v%d" % version))) == str(version), "CNA catalog v%d import" % version
         # One version past CNA's: its newest catalog plus a crown, a distinct valid GLB derived from the cap.
@@ -126,7 +136,8 @@ def main():
             print("declining run:", result.stdout.strip().replace("\n", "; "))
         finally:
             server.terminate(); server.wait(timeout=10); server.stdout.close()
-    print("Standard XNA avatars over the CNA service: every CNA catalog imported; a format 2 avatar on catalog v%d; "
+    print("Standard XNA avatars over the CNA service: CNA's catalogs imported from the baseline v3, development "
+          "catalogs refused; a format 2 avatar on catalog v%d; "
           "own/looked-up/absent descriptions; the missing catalog installed as one pack and reused; a declining "
           "client drawing the projection; an editor save stored through avatars.set." % target)
     return 0
