@@ -4,6 +4,12 @@ import os, pathlib, selectors, shutil, socket, subprocess, sys, tempfile, time
 
 
 def main():
+    original_flags=sys.argv[2:]
+    guests="--guests" in original_flags
+    guests_c="--guests-c" in original_flags
+    assert len(original_flags)==len(set(original_flags)),"duplicate flags"
+    assert not (guests or guests_c) or len(set(original_flags)-{"--isolated"})==1,"guest variants have their own barriers"
+    sys.argv[2:]=[flag for flag in original_flags if flag not in {"--guests","--guests-c"}]
     flags=sys.argv[2:]
     assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart","--migrate","--crash","--add","--qos","--qos-nohost"},"test arguments"
     qos="--qos" in flags
@@ -20,6 +26,7 @@ def main():
     add="--add" in flags
     variant="qos-nohost" if qos_nohost else "qos" if qos else "invite" if invite else "crash" if crash else "migrate" if migrate else "add" if add else None
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
+    variant="guests-c" if guests_c else "guests" if guests else variant
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
             print("Linux unshare/ip/slirp4netns required for NAT-isolated session test")
@@ -124,6 +131,19 @@ def main():
         try:
             for kind,game in (("player","one"),("ranked","two")):
                 server,url=start()
+                if guests or guests_c:
+                    host=spawn("host",kind,game,url);send(host,"alice-password\n");read(host,"session-created")
+                    join=spawn("join",kind,game,url);send(join,"bob-password\n");read(join,"session-joined")
+                    both("session-roster");proceed(host,join)
+                    if guests:
+                        both("guests-exchanged");proceed(host,join)
+                        both("guests-progress-refused");proceed(host,join)
+                        both("guests-lobby");proceed(host,join)
+                        both("guests-added");proceed(host,join)
+                        both("guests-closed");proceed(host,join)
+                    print(done(host));print(done(join));stop(server);server=None
+                    print(kind,"real guest create/find/join/flags via", "C ABI" if guests_c else "XNA API, guest packets/add/close, progress denial and parent sign-out/migration")
+                    continue
                 host=spawn("host",kind,game,url);send(host,"alice-password\ncharlie-password\n");read(host,"session-created")
                 if invite:read(host,"invite-sent")
                 join=spawn("join",kind,game,url);send(join,"bob-password\ndana-password\n")

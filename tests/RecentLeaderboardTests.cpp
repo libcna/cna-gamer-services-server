@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "CnaService/Service.hpp"
+#include "LegacyGuestSchema.hpp"
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -158,7 +159,7 @@ void ExistingTimestampMigrationAndRestart() {
     f.service.reset();
     {
         // Real pre-policy schema-25 shape: every entry already has NOT NULL updated.
-        Store db(f.path);db.exec("DROP INDEX IF EXISTS leaderboard_recent_expiry; PRAGMA user_version=25;");
+        Store db(f.path);removeGuestSchemaForMigration(db);db.exec("DROP INDEX IF EXISTS leaderboard_recent_expiry; PRAGMA user_version=25;");
         db.exec("UPDATE leaderboards SET aggregation='latest',ascending=0 WHERE key='BestTimeRecent'");
     }
     f.clock=T+604800;f.restart();
@@ -169,12 +170,12 @@ void ExistingTimestampMigrationAndRestart() {
     f.clock=T+604900;f.restart();
     check(f.read("BestScoreRecent")["total"]==0,"second restart does not renew row");
     Store db(f.path);Statement version(db.db(),"PRAGMA user_version");
-    check(version.row()&&version.number(0)==26,"one-time v26 migration");
+    check(version.row()&&version.number(0)==27,"v26 migration followed by current guest schema");
 }
 
 void MigrationFailureRollsBackPolicyAndVersion() {
     Fixture f;f.service.reset();
-    {Store db(f.path);db.exec("DROP INDEX IF EXISTS leaderboard_recent_expiry; PRAGMA user_version=25; "
+    {Store db(f.path);removeGuestSchemaForMigration(db);db.exec("DROP INDEX IF EXISTS leaderboard_recent_expiry; PRAGMA user_version=25; "
         "UPDATE leaderboards SET aggregation='latest',ascending=0 WHERE key='BestTimeRecent'; "
         "CREATE INDEX leaderboard_recent_expiry ON users(username)");}
     bool failed=false;try{Store migrate(f.path);}catch(const Error&){failed=true;}

@@ -3,6 +3,7 @@
 #include "CnaService/Service.hpp"
 #include "CnaService/Version.hpp"
 #include "Admission.hpp"
+#include "ConnectionLease.hpp"
 #include "RelayListener.hpp"
 #include "QosListener.hpp"
 #include "CnaService/QosProtocol.hpp"
@@ -55,13 +56,13 @@ bool signIn(std::string_view body) {
 }
 // One line a minute for the operator: responses per error code, refused connections, open
 // control connections and attached relays. Never a credential, address or request body.
-net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub,EventHub& events,bool jsonLogging) {
+net::awaitable<void> report(Service& service,std::shared_ptr<Admission> admission,RelayHub& hub,EventHub& events,bool jsonLogging) {
     net::steady_timer timer(co_await net::this_coro::executor);
     while(true) {
         timer.expires_after(std::chrono::minutes(1));
         co_await timer.async_wait(net::use_awaitable);
         const auto outcomes=service.takeOutcomes();
-        const auto [control,refused]=admission.take();
+        const auto [control,refused]=admission->take();
         if(jsonLogging) {
             std::cout<<Json{{"timestamp",now()},{"level","info"},{"event","statistics"},
                 {"outcomes",outcomes},{"refusedConnections",refused},{"controlConnections",control},
@@ -74,18 +75,6 @@ net::awaitable<void> report(Service& service,Admission& admission,RelayHub& hub,
         }
     }
 }
-class ConnectionLease {
-public:
-    ConnectionLease(Admission& admission,std::string peer):admission_(admission),peer_(std::move(peer)) {}
-    ~ConnectionLease() {release();}
-    ConnectionLease(const ConnectionLease&)=delete;
-    ConnectionLease& operator=(const ConnectionLease&)=delete;
-    void release() {if(held_){held_=false;admission_.leave(peer_);}}
-private:
-    Admission& admission_;
-    std::string peer_;
-    bool held_=true;
-};
 // A client may send further requests on the same connection, saving a TLS handshake each: the
 // next one must start within 5 s, and a connection serves at most 1000. Five seconds keeps a
 // burst (sign-in, a catalog download) on one connection but frees an idle one long before the
@@ -149,7 +138,7 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Even
         if(ec||!again)co_return false;
     }
 }
-net::awaitable<void> connection(tcp::socket socket,std::string peer,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,EventHub& events,Workers& workers,bool insecure) {
+net::awaitable<void> connection(tcp::socket socket,std::string peer,std::shared_ptr<Admission> admission,net::ssl::context& tls,Service& service,RelayHub& hub,EventHub& events,Workers& workers,bool insecure) {
     ConnectionLease lease(admission,peer);
     try {
         if(insecure) {
@@ -164,7 +153,7 @@ net::awaitable<void> connection(tcp::socket socket,std::string peer,Admission& a
         }
     } catch (...) { /* Untrusted transport failures have no credential-bearing diagnostics. */ }
 }
-net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ssl::context& tls,Service& service,RelayHub& hub,EventHub& events,Workers& workers,bool insecure) {
+net::awaitable<void> accept(tcp::acceptor& acceptor,std::shared_ptr<Admission> admission,net::ssl::context& tls,Service& service,RelayHub& hub,EventHub& events,Workers& workers,bool insecure) {
     net::steady_timer pause(acceptor.get_executor());
     while(true) {
         tcp::socket socket(net::make_strand(acceptor.get_executor()));
@@ -181,7 +170,7 @@ net::awaitable<void> accept(tcp::acceptor& acceptor,Admission& admission,net::ss
         const auto endpoint=socket.remote_endpoint(ec);
         if(ec)continue;
         auto peer=endpoint.address().to_string();
-        if(!admission.admit(peer)) {socket.close(ec);continue;}
+        if(!admission->admit(peer)) {socket.close(ec);continue;}
         auto executor=socket.get_executor();
         net::co_spawn(executor,connection(std::move(socket),std::move(peer),admission,tls,service,hub,events,workers,insecure),net::detached);
     }
@@ -231,8 +220,8 @@ std::string prometheus(const Service::Metrics& metrics,const Admission::Snapshot
        <<"cna_request_duration_seconds_count "<<metrics.requestLatencyBuckets.back()<<'\n';
     return out.str();
 }
-net::awaitable<void> diagnosticsConnection(tcp::socket socket,std::string peer,Admission& admission,
-        Admission& controlAdmission,
+net::awaitable<void> diagnosticsConnection(tcp::socket socket,std::string peer,std::shared_ptr<Admission> admission,
+        std::shared_ptr<Admission> controlAdmission,
         Service& service,RelayHub& hub,EventHub& events,Workers& workers,
         std::chrono::steady_clock::time_point started) {
     ConnectionLease lease(admission,std::move(peer));
@@ -260,7 +249,7 @@ net::awaitable<void> diagnosticsConnection(tcp::socket socket,std::string peer,A
                     {"expectedSchemaVersion",SchemaVersion}}.dump();
             } else {
                 response.set(http::field::content_type,"text/plain; version=0.0.4; charset=utf-8");
-                response.body()=prometheus(metrics,controlAdmission.snapshot(),admission.snapshot(),hub.size(),events.size(),started);
+                response.body()=prometheus(metrics,controlAdmission->snapshot(),admission->snapshot(),hub.size(),events.size(),started);
             }
         } else {
             response.result(http::status::not_found);response.set(http::field::content_type,"application/json");
@@ -270,8 +259,8 @@ net::awaitable<void> diagnosticsConnection(tcp::socket socket,std::string peer,A
         co_await http::async_write(stream,response,net::use_awaitable);
     } catch(...) { /* The diagnostics listener exposes no request data in logs. */ }
 }
-net::awaitable<void> diagnosticsAccept(tcp::acceptor& acceptor,Admission& admission,
-        Admission& controlAdmission,Service& service,
+net::awaitable<void> diagnosticsAccept(tcp::acceptor& acceptor,std::shared_ptr<Admission> admission,
+        std::shared_ptr<Admission> controlAdmission,Service& service,
         RelayHub& hub,EventHub& events,Workers& workers,std::chrono::steady_clock::time_point started) {
     net::steady_timer pause(acceptor.get_executor());
     while(true) {
@@ -283,7 +272,7 @@ net::awaitable<void> diagnosticsAccept(tcp::acceptor& acceptor,Admission& admiss
         }
         const auto endpoint=socket.remote_endpoint(ec);if(ec)continue;
         auto peer=endpoint.address().to_string();
-        if(!admission.admit(peer)){socket.close(ec);continue;}
+        if(!admission->admit(peer)){socket.close(ec);continue;}
         auto executor=socket.get_executor();
         net::co_spawn(executor,diagnosticsConnection(std::move(socket),std::move(peer),admission,
             controlAdmission,service,hub,events,workers,started),net::detached);
@@ -305,17 +294,21 @@ void listen(const std::string& database,const std::string& address,unsigned shor
     raiseDescriptorLimit();
     Service service(database);RelayHub hub;EventHub events;
     service.setHintSink([&events](const std::string& user,const std::string& topic){events.notify(user,topic);});
-    net::io_context io(2);net::ssl::context tls(net::ssl::context::tls_server);
+    net::ssl::context tls(net::ssl::context::tls_server);
     if(SSL_CTX_set_min_proto_version(tls.native_handle(),TLS1_2_VERSION)!=1)throw Error("TLS_REQUIRED");
     if(!insecureLoopback) {
         tls.use_certificate_chain_file(certificate);tls.use_private_key_file(key,net::ssl::context::pem);
         if(SSL_CTX_check_private_key(tls.native_handle())!=1)throw Error("TLS_REQUIRED");
     }
+    // io_context destruction discards pending coroutine frames after run() stops.
+    // Every referenced service, TLS context and worker pool must outlive that cleanup.
+    Workers workers;
+    auto admission=std::make_shared<Admission>(),diagnosticsAdmission=std::make_shared<Admission>();
+    net::io_context io(2);
     tcp::acceptor acceptor(io,{bind,port});
     std::optional<tcp::acceptor> diagnosticsAcceptor;
     if(diagnosticsEnabled)diagnosticsAcceptor.emplace(io,tcp::endpoint{*diagnosticsBind,diagnosticsPort});
     net::signal_set signals(io,SIGINT,SIGTERM);signals.async_wait([&](auto,int){io.stop();});
-    Workers workers;Admission admission,diagnosticsAdmission;
     const auto started=std::chrono::steady_clock::now();
     net::co_spawn(io,accept(acceptor,admission,tls,service,hub,events,workers,insecureLoopback),[&](std::exception_ptr error){if(error)io.stop();});
     if(diagnosticsAcceptor)net::co_spawn(io,diagnosticsAccept(*diagnosticsAcceptor,diagnosticsAdmission,

@@ -190,8 +190,10 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     const auto op=stringField(r,"op",64), game=stringField(r,"game",64), id=stringField(r,"id",64);
     const auto& a=r["args"];
     static const std::set<std::string> operations{"hello","auth.login","auth.logout","auth.refresh","auth.ping","gamer.lookup","profile.get","profile.gameDefaults","profile.setGameDefaults","profile.setGamerZone","friends.list","friends.add","friends.remove","friends.accept","presence.set","presence.status","achievements.list","achievements.award","assets.read","leaderboards.read","leaderboards.definition","leaderboards.list","leaderboards.game.begin","leaderboards.game.commit","leaderboards.game.abort","sessions.findQos","sessions.qosTicket","sessions.qosHostTicket","sessions.relayTicket","sessions.create","sessions.find","sessions.get","sessions.touch","sessions.update","sessions.join","sessions.joinInvited","sessions.leave","sessions.remove","sessions.addMembers","invites.send","invites.list","invites.get","invites.accept","invites.dismiss","invites.joinFriend","parties.get","parties.invite","parties.accept","parties.decline","parties.leave","messages.send","messages.list","messages.read","messages.delete","reviews.submit","avatars.get","avatars.set","avatars.catalog","avatars.catalogPack","privacy.block","privacy.unblock","privacy.list"};
-    if (!operations.contains(op)) throw Error("UNKNOWN_OPERATION");
-    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes","privacy","friend-voice","policy-refresh","qos-prejoin-v1"})},{"maxMessageBytes",MaxMessageBytes}};
+    const bool guestAware=op.starts_with("sessions.")&&op.ends_with("Guests");
+    const auto baseOp=guestAware?op.substr(0,op.size()-6):op;
+    if ((guestAware&&baseOp=="sessions.qosTicket")||(!operations.contains(baseOp)&&op!="guests.open"&&op!="guests.close")) throw Error("UNKNOWN_OPERATION");
+    if (op=="hello") return Json{{"version",1},{"capabilities",Json::array({"identity","authentication","session-refresh","heartbeat","friends","friend-requests","presence","presence-status","game-defaults","gamer-zone","achievements","assets","leaderboard-reads","leaderboard-list","title-version","local-leaderboard-commit","leaderboard-epoch-abort","ranked-arbitration","messages","player-reviews","avatars","avatar-catalog-packs","files","session-directory","session-removal","host-migration","session-add-members","session-invitations","join-friend","parties","events","relay-tickets","relay","request-outcomes","privacy","friend-voice","policy-refresh","qos-prejoin-v1","online-guests-v1"})},{"maxMessageBytes",MaxMessageBytes}};
     Statement title(store_.db(),"SELECT id,minimum_version FROM titles WHERE id=?");title.bind(1,game);
     if (!title.row()) throw Error("UNKNOWN_TITLE");
     // A title may stop accepting old game versions (XNA GameUpdateRequiredException); a client that
@@ -212,7 +214,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     }
     // Ephemeral secret-bearing operations have bounded in-memory duplicate protection;
     // never put permits or probe tickets in durable request-outcome replay records.
-    if(op=="sessions.findQos"||op.starts_with("sessions.qos"))return qosControl(r,user,game,op,a);
+    if(baseOp=="sessions.findQos"||baseOp.starts_with("sessions.qos"))return qosControl(r,user,game,op,a);
     if (op=="auth.login"||op=="auth.refresh") {
         for (auto it=loginRates_.begin();it!=loginRates_.end();) {
             if (timestamp-it->second.start>=60) it=loginRates_.erase(it);else ++it;
@@ -239,11 +241,11 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
             if(signedIn)user=account;
         }
     }
-    const bool recorded=!Unrecorded.contains(op);
+    const bool recorded=!Unrecorded.contains(baseOp);
     // Whose request ID this is: the authenticated caller; nobody yet for a sign-in or refresh.
     const auto owner=token.empty()?std::string{}:user;
     // Settled before the transaction: SQLite refuses to change the sync level inside one.
-    const DurableScope durable(store_,!Ephemeral.contains(op));
+    const DurableScope durable(store_,!Ephemeral.contains(baseOp));
     // The request ID, the change it makes and its outcome commit together or not at all: a crash
     // before the commit leaves the ID unused, so the client's retry runs the request; a crash
     // after it leaves the outcome, so the retry is answered from the record.
@@ -283,7 +285,16 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
             if (!replayable) throw Error("DUPLICATE_REQUEST");
             transaction.commit();
             if (*outcome!="OK") throw Error(*outcome);
-            return parse(*stored);
+            auto replay=parse(*stored);
+            if(op=="guests.open") {
+                Statement live(store_.db(),"SELECT 1 FROM guest_identities g JOIN sessions a ON a.refresh_family=g.family_id JOIN refresh_families f ON f.id=g.family_id JOIN users u ON u.id=g.parent_id WHERE g.id=? AND a.hash=? AND g.game_id=? AND g.parent_id=? AND f.revoked=0 AND f.expires>? AND u.online_allowed=1");
+                live.bind(1,stringField(replay,"guestId",34));live.bind(2,sha256(token));live.bind(3,game);live.bind(4,user);live.bind(5,now());if(!live.row())throw Error("NOT_AUTHORIZED");
+            }
+            if(guestAware&&replay.contains("members"))for(const auto& member:replay["members"])if(member.value("isGuest",false)) {
+                Statement live(store_.db(),"SELECT 1 FROM directory_members m JOIN guest_identities g ON g.id=m.guest_id JOIN refresh_families f ON f.id=g.family_id JOIN users u ON u.id=g.parent_id WHERE m.user_id=? AND m.session_id=? AND f.revoked=0 AND f.expires>? AND u.online_allowed=1");
+                live.bind(1,member["userId"].get<std::string>());live.bind(2,replay["session"].get<std::string>());live.bind(3,now());if(!live.row())throw Error("NOT_AUTHORIZED");
+            }
+            return replay;
         }
         if (counted->second>=MaxTitleRequestIds) throw Error("LIMIT_EXCEEDED");
         if (!owner.empty()) {
@@ -313,7 +324,7 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     if (recorded) {
         // Results that carry a secret (access and refresh tokens, relay tickets) are never stored;
         // a repeat of those is refused as before.
-        static const std::set<std::string> Secret{"auth.login","auth.refresh","sessions.relayTicket"};
+        static const std::set<std::string> Secret{"auth.login","auth.refresh","sessions.relayTicket","sessions.relayTicketGuests"};
         const auto stored=outcome=="OK"&&!Secret.contains(op)?result.dump():std::string{};
         Statement keep(store_.db(),"UPDATE request_ids SET user_id=?,op=?,outcome=?,result=? WHERE game_id=? AND id=?");
         keep.bind(1,owner);keep.bind(2,op);keep.bind(3,outcome);
@@ -330,6 +341,12 @@ Json Service::dispatch(const Json& r,const std::string& peer,std::unique_lock<st
     return result;
 }
 Json Service::execute(const std::string& op,const std::string& game,const std::string& user,const Json& r,const Json& a,long long timestamp) {
+    if(op=="guests.open"||op=="guests.close")return guests(user,game,stringField(r,"token",128),op,a);
+    if(op.starts_with("sessions.")&&op.ends_with("Guests")) {
+        const auto base=op.substr(0,op.size()-6);
+        if(base=="sessions.relayTicket")return issueRelayTicket(user,game,a,true);
+        return directory(user,game,base,a,true);
+    }
     if(op=="auth.refresh")return refreshCredentials(game,a);
     if(op=="auth.ping") {
         // The client may say whether it can currently talk (XNA FriendGamer.HasVoice, capability

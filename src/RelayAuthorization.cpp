@@ -15,12 +15,13 @@ void Service::pruneRelayTickets() {
     Statement remove(store_.db(),"DELETE FROM relay_tickets WHERE (used=0 AND expires<=?) OR grant_expires<=?");
     remove.bind(1,now());remove.bind(2,now());(void)remove.row();
 }
-Json Service::issueRelayTicket(const std::string& user,const std::string& game,const Json& args) {
+Json Service::issueRelayTicket(const std::string& user,const std::string& game,const Json& args,bool guestAware) {
     if(args.size()!=2||!args.contains("session")||!args.contains("participants"))throw Error("INVALID_ARGUMENT");
     const auto session=stringField(args,"session",32);if(!hexId(session,32))throw Error("INVALID_ARGUMENT");
-    pruneDirectory();pruneRelayTickets();const auto users=directoryParticipants(user,game,args);
-    Statement current(store_.db(),"SELECT id FROM directory_sessions WHERE id=? AND game_id=?");current.bind(1,session);current.bind(2,game);
+    pruneDirectory();pruneRelayTickets();const auto users=directoryParticipants(user,game,args,true,guestAware);
+    Statement current(store_.db(),"SELECT guest_protocol FROM directory_sessions WHERE id=? AND game_id=?");current.bind(1,session);current.bind(2,game);
     if(!current.row())throw Error("NOT_FOUND");
+    if((current.number(0)!=0)!=guestAware)throw Error("NOT_SUPPORTED");
     Statement owner(store_.db(),"SELECT id FROM directory_machines WHERE session_id=? AND owner_id=?");owner.bind(1,session);owner.bind(2,user);
     if(!owner.row()) {
         Statement removed(store_.db(),"SELECT 1 FROM directory_removals WHERE session_id=? AND user_id=?");removed.bind(1,session);removed.bind(2,user);
@@ -30,13 +31,8 @@ Json Service::issueRelayTicket(const std::string& user,const std::string& game,c
     std::set<std::string> roster;Statement members(store_.db(),"SELECT user_id FROM directory_members WHERE machine_id=?");members.bind(1,machine);
     while(members.row())roster.insert(members.text(0));
     if(roster!=std::set<std::string>(users.begin(),users.end()))throw Error("NOT_AUTHORIZED");
-    struct Member {std::string user,family;};std::vector<Member> authority;long long deadline=now()+RelayGrantLifetimeSeconds;
-    for(const auto& credential:args["participants"]) {
-        Statement family(store_.db(),"SELECT s.user_id,f.id,f.expires FROM sessions s JOIN refresh_families f ON f.id=s.refresh_family WHERE s.hash=? AND s.game_id=? AND s.expires>? AND f.game_id=s.game_id AND f.user_id=s.user_id AND f.revoked=0 AND f.expires>?");
-        family.bind(1,sha256(credential.get_ref<const std::string&>()));family.bind(2,game);family.bind(3,now());family.bind(4,now());
-        if(!family.row())throw Error("NOT_AUTHORIZED");
-        authority.push_back({family.text(0),family.text(1)});deadline=std::min(deadline,family.number(2));
-    }
+    const auto authority=participantAuthority(user,game,args,true,guestAware);long long deadline=now()+RelayGrantLifetimeSeconds;
+    for(const auto& participant:authority)deadline=std::min(deadline,participant.expires);
     Store::Transaction transaction(store_);
     Statement count(store_.db(),"SELECT COUNT(*) FROM relay_tickets WHERE machine_id=?");count.bind(1,machine);(void)count.row();
     if(count.number(0)>=MaxMachineRelayTickets)throw Error("LIMIT_EXCEEDED");
@@ -47,8 +43,8 @@ Json Service::issueRelayTicket(const std::string& user,const std::string& game,c
     insert.bind(1,hash);insert.bind(2,game);insert.bind(3,session);insert.bind(4,machine);insert.bind(5,user);
     insert.bind(6,static_cast<long long>(authority.size()));insert.bind(7,timestamp);insert.bind(8,expires);insert.bind(9,deadline);(void)insert.row();
     for(const auto& participant:authority) {
-        Statement member(store_.db(),"INSERT INTO relay_ticket_members(ticket_hash,user_id,family_id) VALUES(?,?,?)");
-        member.bind(1,hash);member.bind(2,participant.user);member.bind(3,participant.family);(void)member.row();
+        Statement member(store_.db(),"INSERT INTO relay_ticket_members(ticket_hash,user_id,family_id,parent_id) VALUES(?,?,?,?)");
+        member.bind(1,hash);member.bind(2,participant.participant);member.bind(3,participant.family);member.bind(4,participant.parent);(void)member.row();
     }
     transaction.commit();
     return Json{{"ticket",ticket},{"session",session},{"machine",machine},{"expires",expires},{"serverTime",timestamp},
@@ -66,7 +62,7 @@ bool Service::validateRelayGrantLocked(const RelayGrant& grant,bool redeemed) {
     Statement roster(store_.db(),"SELECT COUNT(*) FROM directory_members WHERE machine_id=? AND session_id=? AND game_id=?");
     // A machine may have gained members since (sessions.addMembers); every ticket member must still be one.
     roster.bind(1,grant.machine);roster.bind(2,grant.session);roster.bind(3,grant.game);(void)roster.row();if(roster.number(0)<expected)return false;
-    Statement valid(store_.db(),"SELECT COUNT(*) FROM relay_ticket_members t JOIN refresh_families f ON f.id=t.family_id JOIN users u ON u.id=t.user_id JOIN directory_members m ON m.user_id=t.user_id AND m.machine_id=? AND m.session_id=? AND m.game_id=? WHERE t.ticket_hash=? AND f.user_id=t.user_id AND f.game_id=? AND f.revoked=0 AND f.expires>? AND u.online_allowed=1");
+    Statement valid(store_.db(),"SELECT COUNT(*) FROM relay_ticket_members t JOIN refresh_families f ON f.id=t.family_id JOIN users u ON u.id=t.parent_id JOIN directory_members m ON m.user_id=t.user_id AND m.machine_id=? AND m.session_id=? AND m.game_id=? WHERE t.ticket_hash=? AND f.user_id=t.parent_id AND COALESCE(m.parent_id,m.user_id)=t.parent_id AND (m.guest_id IS NULL OR m.family_id=t.family_id) AND f.game_id=? AND f.revoked=0 AND f.expires>? AND u.online_allowed=1");
     valid.bind(1,grant.machine);valid.bind(2,grant.session);valid.bind(3,grant.game);valid.bind(4,grant.ticketHash);valid.bind(5,grant.game);valid.bind(6,now());
     (void)valid.row();return valid.number(0)==expected;
 }
@@ -89,6 +85,11 @@ void Service::releaseRelayGrant(const RelayGrant& grant) {
     std::lock_guard lock(mutex_);
     Statement remove(store_.db(),"DELETE FROM relay_tickets WHERE hash=? AND game_id=? AND session_id=? AND machine_id=? AND owner_id=? AND used=1");
     remove.bind(1,grant.ticketHash);remove.bind(2,grant.game);remove.bind(3,grant.session);remove.bind(4,grant.machine);remove.bind(5,grant.owner);(void)remove.row();
+    // Guest removal can redeem a replacement group before the old WebSocket closes.
+    // Its old grant must not shorten the retained parent's freshly renewed machine lease.
+    Statement active(store_.db(),"SELECT hash,game_id,session_id,machine_id,owner_id FROM relay_tickets WHERE machine_id=? AND used=1 AND grant_expires>?");
+    active.bind(1,grant.machine);active.bind(2,now());
+    while(active.row())if(validateRelayGrantLocked({active.text(0),active.text(1),active.text(2),active.text(3),active.text(4)},true))return;
     // Every session peer talks through the relay, so a machine off it for longer than a client's
     // relay recovery takes is gone: a crashed host is handed over (or its session closed) within
     // RelayLossGraceSeconds instead of the 90-second lease.

@@ -17,7 +17,7 @@ authorities.
 
 ## Schema and migrations
 
-`PRAGMA user_version` is the schema identity. The current version is 26. `Store::Store` refuses a
+`PRAGMA user_version` is the schema identity. The current version is 27. `Store::Store` refuses a
 larger value with `UNSUPPORTED_DATABASE_VERSION`. It applies every missing migration in numerical
 order; each migration has its own `BEGIN IMMEDIATE` transaction and sets its exact version before
 commit. If migration N fails, N rolls back and previously committed migrations remain valid; the
@@ -89,3 +89,27 @@ since migration 003; there is no supported timestamp-free service row format. Ba
 rollout. Older binaries refuse version 26; restore a verified pre-upgrade backup for rollback.
 The wire protocol stays v1. The seven-day window and equal-write refresh are CNA policy;
 see protocol/v1.md.
+
+## Online guests (27)
+
+Back up with the online backup tool and verify that backup **before upgrading**.
+Migration 027 adds immutable directory guest mode, family-bound guest identities,
+rolling open budgets and typed membership/relay authorization. Migration 026 is
+unchanged. Account directory IDs, machine IDs, ordinals, leases and legacy wire
+snapshots are preserved. Generated account/guest references, a deferred same-session
+parent foreign key and insertion triggers enforce the typed graph. Guest identities
+have no users, access credentials, achievements or leaderboard ownership.
+
+The entire migration and version 27 publication share one transaction. An error
+rolls back the first ALTER as well as rebuilt member tables. Older binaries refuse
+27; rollback means restoring a verified pre-upgrade backup, never editing user_version.
+Legacy account memberships keep their original lease behavior. New mode binds every
+participant to a live family, pruning guest and secondary-parent departures with an
+authoritative revision; owner departure follows normal host migration.
+
+Guest identities are bounded at 3/family/title, 24/account/title, 1024/title and
+8192/service database (one supported process). Open calls including idempotent calls
+are bounded at 8/account/title/rolling60s; the rolling table has at most65536 rows.
+Request-driven pruning removes expired/revoked family identities. Guest IDs can
+survive a service restart while the parent family is live; CNA does not persist or
+auto-login a guest. See [the protocol](../protocol/online-guests-v1.md).

@@ -2,6 +2,7 @@
 #include "AvatarFixtures.hpp"
 #include "CnaService/Avatars.hpp"
 #include "CnaService/Service.hpp"
+#include "LegacyGuestSchema.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -556,12 +557,12 @@ int main() {
                            "id INTEGER NOT NULL CHECK(id BETWEEN 1 AND 65535), slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 6), PRIMARY KEY(version,id)); "
                            "INSERT INTO avatar_catalog_items_old SELECT version,id,slot FROM avatar_catalog_items; DROP TABLE avatar_catalog_items; "
                            "ALTER TABLE avatar_catalog_items_old RENAME TO avatar_catalog_items");
-                store.exec("DROP INDEX leaderboard_recent_expiry; PRAGMA user_version=23");
+                removeGuestSchemaForMigration(store);store.exec("DROP INDEX leaderboard_recent_expiry; PRAGMA user_version=23");
             }
             {
                 Store upgraded(legacyPath.string());
                 auto count=[&](const char* sql){Statement s(upgraded.db(),sql);(void)s.row();return s.number(0);};
-                check(count("PRAGMA user_version")==SchemaVersion&&SchemaVersion==26,"schema 24, 25 and 26 migrations");
+                check(count("PRAGMA user_version")==SchemaVersion&&SchemaVersion==27,"schema 24 through 27 migrations");
                 check(count("SELECT COUNT(*) FROM avatar_catalogs WHERE revision=1")==1&&
                       count("SELECT COUNT(*) FROM avatar_catalog_items WHERE format=1")==count("SELECT COUNT(*) FROM avatar_catalog_items"),
                       "schema 25: imported catalogs are revision 1 and their items format 1");

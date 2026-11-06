@@ -83,6 +83,18 @@ public:
     void releaseQosGrant(const QosBinding& binding);
 private:
     friend struct QosTestAccess;
+    friend struct GuestTestAccess;
+    std::function<long long()> guestClock_;
+    long long guestNow() const;
+    Json guests(const std::string& actor,const std::string& game,const std::string& token,const std::string& op,const Json& args);
+    void pruneGuests();
+    void insertDirectoryMember(const std::string& session,const std::string& game,const std::string& participant,
+        const std::string& machine,long long privateSlot,long long ordinal,const std::string& family);
+    struct ParticipantAuthority {std::string participant,parent,family;long long expires=0;};
+    std::vector<ParticipantAuthority> participantAuthority(const std::string& actor,const std::string& game,const Json& args,bool includesActor,bool guestAware);
+    std::string guestParent(const std::string& participant);
+    bool guestVisible(const std::string& actor,const std::string& session);
+
     QosAuthorityState qos_;
     Json qosControl(const Json& request,const std::string& actor,const std::string& game,
                     const std::string& op,const Json& args);
@@ -92,7 +104,7 @@ private:
     void hint(const std::string& user,const char* topic);
     std::vector<std::pair<std::string,std::string>> hints_;
     std::function<void(const std::string&,const std::string&)> hintSink_;
-    Json issueRelayTicket(const std::string& user,const std::string& game,const Json& args);
+    Json issueRelayTicket(const std::string& user,const std::string& game,const Json& args,bool guestAware=false);
     bool validateRelayGrantLocked(const RelayGrant& grant,bool redeemed);
     void pruneRelayTickets();
     Json dispatch(const Json& request,const std::string& peer,std::unique_lock<std::mutex>& lock);
@@ -108,9 +120,9 @@ private:
     Json issueCredentials(const std::string& user,const std::string& game,const std::string& family={});
     Json refreshCredentials(const std::string& game,const Json& args);
     void revokeFamily(const std::string& family);
-    Json directory(const std::string& user,const std::string& game,const std::string& op,const Json& args);
-    Json directorySnapshot(const std::string& id,bool includeMembers);
-    std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args,bool includesActor=true);
+    Json directory(const std::string& user,const std::string& game,const std::string& op,const Json& args,bool guestAware=false);
+    Json directorySnapshot(const std::string& id,bool includeMembers,bool guestAware=false);
+    std::vector<std::string> directoryParticipants(const std::string& user,const std::string& game,const Json& args,bool includesActor=true,bool guestAware=false);
     void pruneDirectory();
     bool migrateDirectoryHost(const std::string& session,const std::string& departing);
     Json invitations(const std::string& user,const std::string& game,const std::string& op,const Json& args);

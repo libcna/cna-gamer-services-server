@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <sqlite3.h>
 #include "CnaService/Service.hpp"
+#include "LegacyGuestSchema.hpp"
 #include <filesystem>
 #include <iostream>
 #include <array>
@@ -110,12 +111,13 @@ int main() {
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[4]})}},tokens[4])["error"]=="OK","existing ranked membership replay remains idempotent");
         const auto priorRevision=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"]["revision"].get<long long>();
         // Migration 026 owns this index; a synthetic schema-8 fixture must not retain it.
-        {Store admin(path.string());admin.exec("DROP INDEX leaderboard_recent_expiry; ALTER TABLE sessions DROP COLUMN voice; DROP TABLE blocks; ALTER TABLE users DROP COLUMN privilege_communication; ALTER TABLE users DROP COLUMN privilege_profile_viewing; ALTER TABLE users DROP COLUMN privilege_user_content; ALTER TABLE users DROP COLUMN privilege_trade; ALTER TABLE users DROP COLUMN privilege_purchase; ALTER TABLE users DROP COLUMN privilege_premium; DROP TABLE party_invitations; DROP TABLE party_members; DROP TABLE parties; ALTER TABLE users DROP COLUMN gamer_zone; ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
+        {Store admin(path.string());
+         admin.exec("DROP INDEX leaderboard_recent_expiry; ALTER TABLE sessions DROP COLUMN voice; DROP TABLE blocks; ALTER TABLE users DROP COLUMN privilege_communication; ALTER TABLE users DROP COLUMN privilege_profile_viewing; ALTER TABLE users DROP COLUMN privilege_user_content; ALTER TABLE users DROP COLUMN privilege_trade; ALTER TABLE users DROP COLUMN privilege_purchase; ALTER TABLE users DROP COLUMN privilege_premium; DROP TABLE party_invitations; DROP TABLE party_members; DROP TABLE parties; ALTER TABLE users DROP COLUMN gamer_zone; ALTER TABLE users DROP COLUMN game_defaults; ALTER TABLE users DROP COLUMN status; DROP TABLE directory_removals; DROP TABLE avatar_catalog_assets; DROP TABLE avatar_catalog_items; DROP TABLE avatar_catalogs; DROP TABLE avatars; DROP TABLE player_reviews; DROP TABLE messages; DROP TABLE arbitration_submissions; DROP TABLE arbitration_rounds; UPDATE directory_sessions SET allow_join=1 WHERE kind='ranked'; PRAGMA user_version=8;");}
         check(call(service,"sessions.find",find,tokens[1])["result"]["sessions"].empty(),"legacy ranked flag cannot expose gameplay");
         check(call(service,"sessions.join",{{"session",rankedId},{"participants",Json::array({tokens[1]})}},tokens[1])["error"]=="INVALID_STATE","legacy ranked flag cannot allow gameplay join");
         // A real schema 8 database has no allow_migration or title minimum version either; the running
         // service above still needed them.
-        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK&&sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration; ALTER TABLE titles DROP COLUMN minimum_version; ALTER TABLE session_invitations DROP COLUMN requested; "
+        {sqlite3* raw=nullptr;check(sqlite3_open(path.string().c_str(),&raw)==SQLITE_OK,"open legacy fixture");removeGuestSchemaForMigration(raw);check(sqlite3_exec(raw,"ALTER TABLE directory_sessions DROP COLUMN allow_migration; ALTER TABLE titles DROP COLUMN minimum_version; ALTER TABLE session_invitations DROP COLUMN requested; "
             "ALTER TABLE request_ids DROP COLUMN user_id; ALTER TABLE request_ids DROP COLUMN op; ALTER TABLE request_ids DROP COLUMN outcome; ALTER TABLE request_ids DROP COLUMN result",nullptr,nullptr,nullptr)==SQLITE_OK,"legacy schema without host migration");sqlite3_close(raw);}
         {Store upgraded(path.string());Statement version(upgraded.db(),"PRAGMA user_version");check(version.row()&&version.number(0)==SchemaVersion,"ranked policy schema upgrade");}
         auto migrated=call(service,"sessions.get",{{"session",rankedId}},tokens[0])["result"];

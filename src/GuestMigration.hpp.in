@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+inline constexpr const char* GuestMigration=R"SQL(@CNA_GUEST_MIGRATION@)SQL";

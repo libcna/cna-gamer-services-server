@@ -36,6 +36,7 @@ bool Service::migrateDirectoryHost(const std::string& session,const std::string&
 }
 void Service::pruneDirectory() {
     Store::Transaction transaction(store_);
+    pruneGuests();
     // A host lost with migration allowed hands over before the lapsed sessions are closed.
     Statement orphaned(store_.db(),"SELECT id,host_machine FROM directory_sessions WHERE allow_migration=1 AND revision<2147483646 AND "
         "NOT EXISTS(SELECT 1 FROM directory_machines m WHERE m.id=host_machine AND m.expires>?)");
@@ -48,7 +49,8 @@ void Service::pruneDirectory() {
     Statement remove(store_.db(),"DELETE FROM directory_machines WHERE expires<=?");remove.bind(1,now());(void)remove.row();
     transaction.commit();
 }
-std::vector<std::string> Service::directoryParticipants(const std::string& user,const std::string& game,const Json& args,bool includesActor) {
+std::vector<std::string> Service::directoryParticipants(const std::string& user,const std::string& game,const Json& args,bool includesActor,bool guestAware) {
+    if(guestAware){std::vector<std::string> ids;for(const auto& p:participantAuthority(user,game,args,includesActor,true))ids.push_back(p.participant);return ids;}
     if(!args.contains("participants")||!args["participants"].is_array()||args["participants"].empty()||args["participants"].size()>4)throw Error("INVALID_ARGUMENT");
     std::vector<std::string> participants;std::set<std::string> seen;
     for(const auto& credential:args["participants"]) {
@@ -62,8 +64,8 @@ std::vector<std::string> Service::directoryParticipants(const std::string& user,
     if(seen.contains(user)!=includesActor)throw Error(includesActor?"NOT_AUTHORIZED":"INVALID_ARGUMENT");
     return participants;
 }
-Json Service::directorySnapshot(const std::string& id,bool includeMembers) {
-    Statement session(store_.db(),"SELECT d.id,d.kind,d.state,d.max_gamers,d.private_slots,d.properties,d.allow_join,d.revision,d.host_id,u.gamertag,d.host_machine,(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=0),(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=1),d.allow_migration FROM directory_sessions d JOIN users u ON u.id=d.host_id WHERE d.id=?");
+Json Service::directorySnapshot(const std::string& id,bool includeMembers,bool guestAware) {
+    Statement session(store_.db(),"SELECT d.id,d.kind,d.state,d.max_gamers,d.private_slots,d.properties,d.allow_join,d.revision,d.host_id,u.gamertag,d.host_machine,(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=0),(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=1),d.allow_migration,d.guest_protocol FROM directory_sessions d JOIN users u ON u.id=d.host_id WHERE d.id=?");
     session.bind(1,id);if(!session.row())throw Error("NOT_FOUND");
     Json result{{"session",session.text(0)},{"kind",session.text(1)},{"state",session.text(2)},
         {"maxGamers",session.number(3)},{"privateSlots",session.number(4)},{"properties",parse(session.text(5))},
@@ -72,17 +74,21 @@ Json Service::directorySnapshot(const std::string& id,bool includeMembers) {
         {"currentGamers",session.number(11)+session.number(12)},
         {"openPublicSlots",session.number(3)-session.number(4)-session.number(11)},
         {"openPrivateSlots",session.number(4)-session.number(12)}};
+    if(guestAware)result["guestProtocol"]=session.number(14);
     if(includeMembers) {
         // Members only, and only when set: a search result, or a client that predates host
         // migration reading a session without it, sees exactly the fields it always has.
         if(session.number(13)!=0)result["allowHostMigration"]=true;
-        Statement members(store_.db(),"SELECT m.user_id,u.gamertag,m.machine_id,m.private_slot,m.ordinal FROM directory_members m JOIN users u ON u.id=m.user_id WHERE m.session_id=? ORDER BY m.ordinal");
-        members.bind(1,id);Json rows=Json::array();while(members.row())rows.push_back(Json{{"userId",members.text(0)},{"gamertag",members.text(1)},{"machine",members.text(2)},{"privateSlot",members.number(3)!=0},{"ordinal",members.number(4)}});
+        Statement members(store_.db(),"SELECT m.user_id,COALESCE(g.gamertag,u.gamertag),m.machine_id,m.private_slot,m.ordinal,m.guest_id,m.parent_id FROM directory_members m LEFT JOIN users u ON u.id=m.account_id LEFT JOIN guest_identities g ON g.id=m.guest_id WHERE m.session_id=? ORDER BY m.ordinal");
+        members.bind(1,id);Json rows=Json::array();while(members.row()){
+            Json row{{"userId",members.text(0)},{"gamertag",members.text(1)},{"machine",members.text(2)},{"privateSlot",members.number(3)!=0},{"ordinal",members.number(4)}};
+            if(guestAware){row["isGuest"]=!members.null(5);row["parentId"]=members.null(6)?Json(nullptr):Json(members.text(6));}rows.push_back(std::move(row));
+        }
         result["members"]=std::move(rows);
     }
     return result;
 }
-Json Service::directory(const std::string& user,const std::string& game,const std::string& op,const Json& args) {
+Json Service::directory(const std::string& user,const std::string& game,const std::string& op,const Json& args,bool guestAware) {
     static const std::map<std::string,std::set<std::string>> fields{
         {"sessions.create",{"kind","maxGamers","privateSlots","properties","allowJoinInProgress","participants","allowHostMigration"}},
         {"sessions.find",{"kind","localCount","properties","start","limit"}},
@@ -98,8 +104,10 @@ Json Service::directory(const std::string& user,const std::string& game,const st
     Statement allowed(store_.db(),"SELECT online_allowed FROM users WHERE id=?");allowed.bind(1,user);
     if(!allowed.row()||!allowed.number(0))throw Error("NOT_AUTHORIZED");
     pruneDirectory();
+    std::map<std::string,std::string> families;
+    if(guestAware&&args.contains("participants"))for(const auto& p:participantAuthority(user,game,args,op!="sessions.addMembers",true))families[p.participant]=p.family;
     if(op=="sessions.create") {
-        const auto kind=kindField(args);const auto members=directoryParticipants(user,game,args);
+        const auto kind=kindField(args);const auto members=directoryParticipants(user,game,args,true,guestAware);
         const auto maximum=integerField(args,"maxGamers",2,MaxSessionGamers),privateSlots=integerField(args,"privateSlots",0,maximum);
         if(members.size()>static_cast<std::size_t>(maximum))throw Error("INVALID_ARGUMENT");
         if(!args.contains("properties"))throw Error("INVALID_ARGUMENT");
@@ -114,31 +122,32 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             Statement occupied(store_.db(),"SELECT 1 FROM directory_members WHERE game_id=? AND user_id=?");occupied.bind(1,game);occupied.bind(2,member);
             if(occupied.row())throw Error("INVALID_STATE");
         }
-        Statement insert(store_.db(),"INSERT INTO directory_sessions(id,game_id,host_id,host_machine,kind,max_gamers,private_slots,properties,allow_join,created,expires,allow_migration) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
-        insert.bind(1,id);insert.bind(2,game);insert.bind(3,user);insert.bind(4,machine);insert.bind(5,kind);insert.bind(6,maximum);insert.bind(7,privateSlots);insert.bind(8,args["properties"].dump());insert.bind(9,allowJoin?1LL:0LL);insert.bind(10,now());insert.bind(11,now()+90);insert.bind(12,migrate?1LL:0LL);(void)insert.row();
+        Statement insert(store_.db(),"INSERT INTO directory_sessions(id,game_id,host_id,host_machine,kind,max_gamers,private_slots,properties,allow_join,created,expires,allow_migration,guest_protocol) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        insert.bind(1,id);insert.bind(2,game);insert.bind(3,user);insert.bind(4,machine);insert.bind(5,kind);insert.bind(6,maximum);insert.bind(7,privateSlots);insert.bind(8,args["properties"].dump());insert.bind(9,allowJoin?1LL:0LL);insert.bind(10,now());insert.bind(11,now()+90);insert.bind(12,migrate?1LL:0LL);insert.bind(13,guestAware?1LL:0LL);(void)insert.row();
         Statement group(store_.db(),"INSERT INTO directory_machines(id,session_id,owner_id,expires) VALUES(?,?,?,?)");group.bind(1,machine);group.bind(2,id);group.bind(3,user);group.bind(4,now()+90);(void)group.row();
         for(std::size_t index=0;index<members.size();++index) {
-            Statement join(store_.db(),"INSERT INTO directory_members(session_id,game_id,user_id,machine_id,private_slot,ordinal) VALUES(?,?,?,?,?,?)");
-            join.bind(1,id);join.bind(2,game);join.bind(3,members[index]);join.bind(4,machine);join.bind(5,index>=static_cast<std::size_t>(maximum-privateSlots)?1LL:0LL);join.bind(6,static_cast<long long>(index));(void)join.row();
+            insertDirectoryMember(id,game,members[index],machine,index>=static_cast<std::size_t>(maximum-privateSlots)?1LL:0LL,static_cast<long long>(index),families[members[index]]);
         }
-        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
+        auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;
     }
     if(op=="sessions.find") {
         const auto kind=kindField(args);const auto locals=integerField(args,"localCount",1,4),start=integerField(args,"start",0,1024),limit=integerField(args,"limit",1,32);
         if(!args.contains("properties"))throw Error("INVALID_ARGUMENT");
         validateSessionProperties(args["properties"]);
-        Statement search(store_.db(),"SELECT d.id FROM directory_sessions d WHERE d.game_id=? AND d.kind=? AND (d.state='lobby' OR (d.kind='player' AND d.allow_join=1)) AND d.max_gamers-d.private_slots-(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=0)>=? AND NOT EXISTS(SELECT 1 FROM directory_members m WHERE m.session_id=d.id AND m.user_id=?) AND NOT EXISTS(SELECT 1 FROM player_reviews r WHERE r.reviewer_id=?4 AND r.subject_id=d.host_id AND r.rating='avoid') AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=?4 AND b.blocked_id=d.host_id) OR (b.user_id=d.host_id AND b.blocked_id=?4)) AND NOT EXISTS(SELECT 1 FROM json_each(?) p WHERE p.value IS NOT NULL AND (json_extract(d.properties,'$['||p.key||']') IS NULL OR json_extract(d.properties,'$['||p.key||']')!=p.value)) ORDER BY d.created,d.id LIMIT ? OFFSET ?");
-        search.bind(1,game);search.bind(2,kind);search.bind(3,locals);search.bind(4,user);search.bind(5,args["properties"].dump());search.bind(6,limit+1);search.bind(7,start);
-        Json rows=Json::array();while(search.row())rows.push_back(directorySnapshot(search.text(0),false));
+        Statement search(store_.db(),"SELECT d.id FROM directory_sessions d WHERE d.game_id=? AND d.kind=? AND (d.state='lobby' OR (d.kind='player' AND d.allow_join=1)) AND d.max_gamers-d.private_slots-(SELECT COUNT(*) FROM directory_members m WHERE m.session_id=d.id AND m.private_slot=0)>=? AND NOT EXISTS(SELECT 1 FROM directory_members m WHERE m.session_id=d.id AND m.user_id=?) AND NOT EXISTS(SELECT 1 FROM player_reviews r WHERE r.reviewer_id=?4 AND r.subject_id=d.host_id AND r.rating='avoid') AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=?4 AND b.blocked_id=d.host_id) OR (b.user_id=d.host_id AND b.blocked_id=?4)) AND (d.guest_protocol=0 OR ?8=1) AND (d.guest_protocol=0 OR NOT EXISTS(SELECT 1 FROM directory_members gp WHERE gp.session_id=d.id AND gp.account_id IS NOT NULL AND (EXISTS(SELECT 1 FROM blocks gb WHERE (gb.user_id=?4 AND gb.blocked_id=gp.account_id) OR (gb.user_id=gp.account_id AND gb.blocked_id=?4)) OR EXISTS(SELECT 1 FROM player_reviews gr WHERE gr.reviewer_id=?4 AND gr.subject_id=gp.account_id AND gr.rating='avoid')))) AND NOT EXISTS(SELECT 1 FROM json_each(?5) p WHERE p.value IS NOT NULL AND (json_extract(d.properties,'$['||p.key||']') IS NULL OR json_extract(d.properties,'$['||p.key||']')!=p.value)) ORDER BY d.created,d.id LIMIT ?6 OFFSET ?7");
+        search.bind(1,game);search.bind(2,kind);search.bind(3,locals);search.bind(4,user);search.bind(5,args["properties"].dump());search.bind(6,limit+1);search.bind(7,start);search.bind(8,guestAware?1LL:0LL);
+        Json rows=Json::array();while(search.row())rows.push_back(directorySnapshot(search.text(0),false,guestAware));
         const bool more=rows.size()>static_cast<std::size_t>(limit);if(more)rows.erase(rows.end()-1);
         return Json{{"sessions",rows},{"start",start},{"more",more}};
     }
     const auto id=sessionId(args);Store::Transaction transaction(store_);
-    Statement session(store_.db(),"SELECT host_id,host_machine,state,allow_join,revision,max_gamers,private_slots,kind FROM directory_sessions WHERE id=? AND game_id=?");session.bind(1,id);session.bind(2,game);
+    Statement session(store_.db(),"SELECT host_id,host_machine,state,allow_join,revision,max_gamers,private_slots,kind,guest_protocol FROM directory_sessions WHERE id=? AND game_id=?");session.bind(1,id);session.bind(2,game);
     if(!session.row())throw Error("NOT_FOUND");
+    if((session.number(8)!=0)!=guestAware)throw Error("NOT_SUPPORTED");
+    if(guestAware&&args.contains("participants"))for(const auto& p:participantAuthority(user,game,args,op!="sessions.addMembers",true))if(!guestVisible(p.parent,id))throw Error("NOT_AUTHORIZED");
     if(op=="sessions.join"||op=="sessions.joinInvited") {
         const bool invited=op=="sessions.joinInvited";
-        const auto members=directoryParticipants(user,game,args);
+        const auto members=directoryParticipants(user,game,args,true,guestAware);
         std::string inviteId,inviteStatus,usedMachine;
         if(invited) {
             inviteId=stringField(args,"invite",32);
@@ -161,11 +170,11 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             std::set<std::string> prior;Statement group(store_.db(),"SELECT user_id FROM directory_members WHERE machine_id=?");group.bind(1,existing.text(0));while(group.row())prior.insert(group.text(0));
             if(prior!=std::set<std::string>(members.begin(),members.end()))throw Error("INVALID_STATE");
             consume(existing.text(0));
-            auto result=directorySnapshot(id,true);result["machine"]=existing.text(0);transaction.commit();return result;
+            auto result=directorySnapshot(id,true,guestAware);result["machine"]=existing.text(0);transaction.commit();return result;
         }
         if(invited&&inviteStatus=="used")throw Error("INVALID_STATE");
         if(session.text(2)=="playing"&&(session.text(7)=="ranked"||!session.number(3)))throw Error("INVALID_STATE");
-        const auto snapshot=directorySnapshot(id,true);
+        const auto snapshot=directorySnapshot(id,true,guestAware);
         auto privateAvailable=invited?snapshot["openPrivateSlots"].get<std::size_t>():0;
         if(members.size()>snapshot["openPublicSlots"].get<std::size_t>()+privateAvailable)throw Error("SESSION_FULL");
         for(const auto& member:members) {
@@ -176,13 +185,12 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         const auto machine=randomHex(16);Statement group(store_.db(),"INSERT INTO directory_machines(id,session_id,owner_id,expires) VALUES(?,?,?,?)");group.bind(1,machine);group.bind(2,id);group.bind(3,user);group.bind(4,now()+90);(void)group.row();
         for(const auto& member:members) {
             long long ordinal=0;while(ordinals.contains(ordinal))++ordinal;ordinals.insert(ordinal);
-            Statement join(store_.db(),"INSERT INTO directory_members(session_id,game_id,user_id,machine_id,private_slot,ordinal) VALUES(?,?,?,?,?,?)");
-            join.bind(1,id);join.bind(2,game);join.bind(3,member);join.bind(4,machine);join.bind(5,privateAvailable?1LL:0LL);join.bind(6,ordinal);(void)join.row();
+            insertDirectoryMember(id,game,member,machine,privateAvailable?1LL:0LL,ordinal,families[member]);
             if(privateAvailable)--privateAvailable;
         }
         Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();
         consume(machine);
-        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
+        auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;
     }
     Statement member(store_.db(),"SELECT m.machine_id FROM directory_members m WHERE m.session_id=? AND m.user_id=?");member.bind(1,id);member.bind(2,user);
     if(!member.row()) {
@@ -193,12 +201,12 @@ Json Service::directory(const std::string& user,const std::string& game,const st
     }
     const auto machine=member.text(0);
     Statement owner(store_.db(),"SELECT owner_id FROM directory_machines WHERE id=?");owner.bind(1,machine);(void)owner.row();
-    if(op=="sessions.get") {auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;}
+    if(op=="sessions.get") {auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;}
     if(op=="sessions.touch") {
         if(owner.text(0)!=user)throw Error("NOT_AUTHORIZED");
         Statement heartbeat(store_.db(),"UPDATE directory_machines SET expires=? WHERE id=?");heartbeat.bind(1,now()+90);heartbeat.bind(2,machine);(void)heartbeat.row();
         if(machine==session.text(1)){Statement host(store_.db(),"UPDATE directory_sessions SET expires=? WHERE id=?");host.bind(1,now()+90);host.bind(2,id);(void)host.row();}
-        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
+        auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;
     }
     if(op=="sessions.leave") {
         if(owner.text(0)!=user)throw Error("NOT_AUTHORIZED");
@@ -213,11 +221,11 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         // XNA NetworkSession.AddLocalGamer: the machine's owner adds signed-in local accounts to its
         // group, in public slots and only when the session admits joiners, as a join would.
         if(owner.text(0)!=user)throw Error("NOT_AUTHORIZED");
-        const auto added=directoryParticipants(user,game,args,false);
+        const auto added=directoryParticipants(user,game,args,false,guestAware);
         Statement group(store_.db(),"SELECT COUNT(*) FROM directory_members WHERE machine_id=?");group.bind(1,machine);(void)group.row();
         if(group.number(0)+static_cast<long long>(added.size())>4)throw Error("LIMIT_EXCEEDED");
         if(session.text(2)=="playing"&&(session.text(7)=="ranked"||!session.number(3)))throw Error("INVALID_STATE");
-        const auto snapshot=directorySnapshot(id,true);
+        const auto snapshot=directorySnapshot(id,true,guestAware);
         if(added.size()>snapshot["openPublicSlots"].get<std::size_t>())throw Error("SESSION_FULL");
         for(const auto& member:added) {
             Statement occupied(store_.db(),"SELECT 1 FROM directory_members WHERE game_id=? AND user_id=?");occupied.bind(1,game);occupied.bind(2,member);
@@ -226,11 +234,10 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         std::set<long long> ordinals;for(const auto& row:snapshot["members"])ordinals.insert(row["ordinal"].get<long long>());
         for(const auto& member:added) {
             long long ordinal=0;while(ordinals.contains(ordinal))++ordinal;ordinals.insert(ordinal);
-            Statement join(store_.db(),"INSERT INTO directory_members(session_id,game_id,user_id,machine_id,private_slot,ordinal) VALUES(?,?,?,?,0,?)");
-            join.bind(1,id);join.bind(2,game);join.bind(3,member);join.bind(4,machine);join.bind(5,ordinal);(void)join.row();
+            insertDirectoryMember(id,game,member,machine,0,ordinal,families[member]);
         }
         Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();
-        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
+        auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;
     }
     if(op=="sessions.remove") {
         // XNA NetworkMachine.RemoveFromSession: the host removes another machine and all its users.
@@ -240,11 +247,11 @@ Json Service::directory(const std::string& user,const std::string& game,const st
         if(target==machine)throw Error("INVALID_ARGUMENT");
         Statement exists(store_.db(),"SELECT 1 FROM directory_machines WHERE id=? AND session_id=?");exists.bind(1,target);exists.bind(2,id);
         if(!exists.row())throw Error("NOT_FOUND");
-        Statement mark(store_.db(),"INSERT OR IGNORE INTO directory_removals(session_id,user_id) SELECT session_id,user_id FROM directory_members WHERE machine_id=?");
+        Statement mark(store_.db(),"INSERT OR IGNORE INTO directory_removals(session_id,user_id) SELECT session_id,user_id FROM directory_members WHERE machine_id=? AND guest_id IS NULL");
         mark.bind(1,target);(void)mark.row();
         Statement remove(store_.db(),"DELETE FROM directory_machines WHERE id=?");remove.bind(1,target);(void)remove.row();
         Statement changed(store_.db(),"UPDATE directory_sessions SET revision=revision+1 WHERE id=?");changed.bind(1,id);(void)changed.row();
-        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
+        auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;
     }
     if(op=="sessions.update") {
         if(session.text(0)!=user||machine!=session.text(1))throw Error("NOT_AUTHORIZED");
@@ -260,7 +267,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             Statement migration(store_.db(),"UPDATE directory_sessions SET allow_migration=? WHERE id=?");
             migration.bind(1,booleanField(args,"allowHostMigration")?1LL:0LL);migration.bind(2,id);(void)migration.row();
         }
-        const auto current=directorySnapshot(id,false);
+        const auto current=directorySnapshot(id,false,guestAware);
         if(privateSlots<current["privateSlots"].get<long long>()-current["openPrivateSlots"].get<long long>()||
             maximum-privateSlots<current["maxGamers"].get<long long>()-current["privateSlots"].get<long long>()-current["openPublicSlots"].get<long long>())throw Error("INVALID_ARGUMENT");
         Statement update(store_.db(),"UPDATE directory_sessions SET max_gamers=?,private_slots=?,properties=?,state=?,allow_join=?,revision=revision+1,expires=? WHERE id=?");
@@ -270,7 +277,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             // Playing->Lobby closes it so late or missing reports can be resolved.
             if(state=="playing") {
                 Json members=Json::array();std::set<std::string> machines;
-                Statement roster(store_.db(),"SELECT user_id,machine_id FROM directory_members WHERE session_id=? ORDER BY ordinal");roster.bind(1,id);
+                Statement roster(store_.db(),"SELECT user_id,machine_id FROM directory_members WHERE session_id=? AND guest_id IS NULL ORDER BY ordinal");roster.bind(1,id);
                 while(roster.row()){members.push_back(Json{{"userId",roster.text(0)},{"machine",roster.text(1)}});machines.insert(roster.text(1));}
                 Statement round(store_.db(),"INSERT INTO arbitration_rounds(id,game_id,session_id,start_revision,members,machines,created,updated) VALUES(?,?,?,?,?,?,?,?)");
                 round.bind(1,randomHex(16));round.bind(2,game);round.bind(3,id);round.bind(4,revision+1);round.bind(5,members.dump());
@@ -281,7 +288,7 @@ Json Service::directory(const std::string& user,const std::string& game,const st
             }
         }
         Statement heartbeat(store_.db(),"UPDATE directory_machines SET expires=? WHERE id=?");heartbeat.bind(1,now()+90);heartbeat.bind(2,machine);(void)heartbeat.row();
-        auto result=directorySnapshot(id,true);result["machine"]=machine;transaction.commit();return result;
+        auto result=directorySnapshot(id,true,guestAware);result["machine"]=machine;transaction.commit();return result;
     }
     throw Error("UNKNOWN_OPERATION");
 }

@@ -7,10 +7,14 @@ void Service::revokeFamily(const std::string& family) {
     Store::Transaction transaction(store_);
     Statement mark(store_.db(),"UPDATE refresh_families SET revoked=1 WHERE id=?");mark.bind(1,family);(void)mark.row();
     Statement remove(store_.db(),"DELETE FROM sessions WHERE refresh_family=?");remove.bind(1,family);(void)remove.row();
+    pruneDirectory();
     transaction.commit();
 }
 Json Service::issueCredentials(const std::string& user,const std::string& game,const std::string& existingFamily) {
     const auto timestamp=now();auto family=existingFamily;auto refreshExpires=timestamp+30LL*86400;
+    // Observe invalid guest families before FK deletion removes the evidence: partial roster
+    // cleanup must publish a new authoritative revision even for a secondary parent.
+    pruneDirectory();
     Statement prune(store_.db(),"DELETE FROM refresh_families WHERE expires<=? OR revoked=1");prune.bind(1,timestamp);(void)prune.row();
     Statement expired(store_.db(),"DELETE FROM sessions WHERE expires<=?");expired.bind(1,timestamp);(void)expired.row();
     if(family.empty()) {

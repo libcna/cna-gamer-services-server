@@ -77,7 +77,9 @@ file(READ migrations/026_recent_leaderboards.sql CNA_RECENT_LEADERBOARD_MIGRATIO
 configure_file(src/RecentLeaderboardMigration.hpp.in generated/RecentLeaderboardMigration.hpp @ONLY)
 file(READ migrations/025_avatar_catalog_revisions.sql CNA_AVATAR_REVISION_MIGRATION)
 configure_file(src/AvatarRevisionMigration.hpp.in generated/AvatarRevisionMigration.hpp @ONLY)
-add_library(cna_service src/QosProtocol.cpp src/QosAuthority.cpp src/Privacy.cpp src/DatabaseLock.cpp src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
+file(READ migrations/027_online_guests.sql CNA_GUEST_MIGRATION)
+configure_file(src/GuestMigration.hpp.in generated/GuestMigration.hpp @ONLY)
+add_library(cna_service src/Guests.cpp src/QosProtocol.cpp src/QosAuthority.cpp src/Privacy.cpp src/DatabaseLock.cpp src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
 target_include_directories(cna_service PUBLIC include protocol/include ${CMAKE_CURRENT_BINARY_DIR}/generated/include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(cna_service PUBLIC OpenSSL::Crypto SQLite::SQLite3 nlohmann_json::nlohmann_json)
 target_compile_options(cna_service PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -291,6 +293,13 @@ set_tests_properties(service_admin_web PROPERTIES TIMEOUT 120 LABELS "integratio
 
 # Stable labels let one maintainer choose an honest qualification cost without remembering a long
 # regular expression. Tests requiring separately-built CNA programs retain exit-77 skip semantics.
+
+# GAP-16: replacement-service guest authority, atomic admission and accounting.
+add_executable(guest_authority_tests tests/GuestAuthorityTests.cpp)
+target_link_libraries(guest_authority_tests PRIVATE cna_service Threads::Threads)
+target_compile_options(guest_authority_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_guest_authority COMMAND guest_authority_tests)
+set_tests_properties(service_guest_authority PROPERTIES LABELS "unit" TIMEOUT 180)
 set(CNA_UNIT_TESTS
     service_version service_unit service_ranked_migration service_privacy service_database_lock service_atomicity
     service_directory service_arbitration service_avatars service_avatar_validation service_social
@@ -302,6 +311,12 @@ set_tests_properties(service_tls_e2e service_benchmark_smoke service_relay_wss s
     service_cache_authorization service_diagnostics PROPERTIES LABELS "integration")
 set_property(TEST service_backup_restore APPEND PROPERTY LABELS "recovery")
 set_property(TEST service_diagnostics APPEND PROPERTY LABELS "observability")
+
+# GAP-16: runner requires the explicitly supplied matching CNA harness.
+add_test(NAME service_cna_guests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --guests)
+add_test(NAME service_cna_guests_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --guests --isolated)
+add_test(NAME service_cna_guests_c_api COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --guests-c)
+set_tests_properties(service_cna_guests service_cna_guests_nat service_cna_guests_c_api PROPERTIES LABELS "cna-harness;integration" TIMEOUT 240 SKIP_RETURN_CODE 77)
 set(CNA_HARNESS_TESTS
     service_cna_directory service_cna_relay service_cna_relay_nat service_cna_owned_enet
     service_cna_owned_enet_nat service_cna_session service_cna_session_nat service_cna_invite
@@ -336,3 +351,16 @@ add_test(NAME service_cna_qos_nohost COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRE
 set_tests_properties(service_cna_qos_nohost PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 
 set_tests_properties(service_qos_protocol service_qos_authority service_qos_routing PROPERTIES LABELS "unit" TIMEOUT 60)
+
+# GAP-16: real Service fixture over anonymous stdio pipes, never a public test operation.
+add_executable(service_directory_contract_stdio EXCLUDE_FROM_ALL tests/ServiceDirectoryContractStdio.cpp)
+target_link_libraries(service_directory_contract_stdio PRIVATE cna_service)
+target_compile_options(service_directory_contract_stdio PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+# Socket-free reproduction of leases released during coroutine/io_context teardown.
+add_executable(connection_lease_tests tests/ConnectionLeaseTests.cpp src/Admission.cpp)
+target_include_directories(connection_lease_tests PRIVATE src)
+target_link_libraries(connection_lease_tests PRIVATE Boost::headers Threads::Threads)
+target_compile_options(connection_lease_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_connection_lease COMMAND connection_lease_tests)
+set_tests_properties(service_connection_lease PROPERTIES LABELS "unit" TIMEOUT 30)

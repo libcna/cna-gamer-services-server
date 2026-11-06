@@ -35,7 +35,12 @@ void Service::pruneQos() {
   std::erase_if(qos_.permits,
                 [&](const auto &p) { return at >= p.second.expires; });
   std::erase_if(qos_.tickets, [&](const auto &p) {
-    return at >= p.second.permit.binding.deadline;
+    if(at >= p.second.permit.binding.deadline)return true;
+    if(!p.second.permit.binding.hostRole)return false;
+    if(!qosValid(p.second.permit)||!validateRelayGrantLocked(p.second.relay,true))return true;
+    Statement group(store_.db(),"SELECT COUNT(*) FROM directory_members WHERE machine_id=? AND session_id=?");
+    group.bind(1,p.second.permit.binding.host);group.bind(2,p.second.permit.binding.session);(void)group.row();
+    return group.number(0)!=static_cast<long long>(p.second.families.size());
   });
   std::erase_if(qos_.requests, [&](const auto &p) { return at >= p.second; });
   for (auto i = qos_.searches.begin(); i != qos_.searches.end();) {
@@ -119,12 +124,17 @@ bool Service::qosValid(const QosAuthorityState::Permit &p) {
   q.bind(4, p.filters["localCount"].get<long long>());
   q.bind(5, b.actor);
   q.bind(6, p.filters["properties"].dump());
-  return q.row();
+  if(!q.row())return false;
+  Statement mode(store_.db(),"SELECT guest_protocol FROM directory_sessions WHERE id=?");mode.bind(1,b.session);
+  if(!mode.row()||(!p.filters.value("guestAware",false)&&mode.number(0)!=0))return false;
+  return mode.number(0)==0||guestVisible(b.actor,b.session);
 }
 Json Service::qosControl(const Json &request, const std::string &actor,
-                         const std::string &game, const std::string &op,
+                         const std::string &game, const std::string &operation,
                          const Json &args) {
   using namespace std::chrono;
+  const bool guestAware=operation.ends_with("Guests");
+  const auto op=guestAware?operation.substr(0,operation.size()-6):operation;
   pruneDirectory();
   pruneQos();
   const auto at = qos_.clock();
@@ -144,7 +154,7 @@ Json Service::qosControl(const Json &request, const std::string &actor,
     throw Error("LIMIT_EXCEEDED");
   qos_.requests.emplace(req, at + seconds(30));
   if (op == "sessions.findQos") {
-    const auto page = directory(actor, game, "sessions.find", args);
+    const auto page = directory(actor, game, "sessions.find", args,guestAware);
     const auto count = page["sessions"].size();
     std::size_t account = 0, title = 0;
     for (const auto &[hash, p] : qos_.permits) {
@@ -176,7 +186,7 @@ Json Service::qosControl(const Json &request, const std::string &actor,
       b.deadline = at + seconds(30);
       qos_.permits.emplace(
           sha256(secret),
-          QosAuthorityState::Permit{b, fam, args, b.deadline, false});
+          QosAuthorityState::Permit{b, fam, [&]{auto filters=args;filters["guestAware"]=guestAware;return filters;}(), b.deadline, false});
       rows.push_back(Json{
           {"listing", listing}, {"permit", secret}, {"lifetimeMs", 30000}});
     }
@@ -227,9 +237,9 @@ Json Service::qosControl(const Json &request, const std::string &actor,
   const auto session = stringField(args, "session", 32);
   if (!hex(session, 32))
     throw Error("INVALID_ARGUMENT");
-  const auto users = directoryParticipants(actor, game, args);
+  const auto users = directoryParticipants(actor, game, args,true,guestAware);
   const auto snapshot =
-      directory(actor, game, "sessions.get", Json{{"session", session}});
+      directory(actor, game, "sessions.get", Json{{"session", session}},guestAware);
   if (snapshot["hostId"] != actor ||
       snapshot["hostMachine"] != snapshot["machine"])
     throw Error("NOT_AUTHORIZED");
@@ -279,17 +289,8 @@ Json Service::qosControl(const Json &request, const std::string &actor,
   b.hash = sha256(ticket);
   QosAuthorityState::Ticket record{
       {b, fam, {}, at + hours(1), false}, relay, {}, false};
-  for (const auto &credential : args["participants"]) {
-    Statement user(store_.db(),
-                   "SELECT user_id FROM sessions WHERE hash=? AND game_id=?");
-    user.bind(1, sha256(credential.get<std::string>()));
-    user.bind(2, game);
-    if (!user.row())
-      throw Error("NOT_AUTHORIZED");
-    const auto id = user.text(0);
-    record.families.emplace_back(
-        id, family(store_, credential.get<std::string>(), game, id));
-  }
+  for (const auto& participant:participantAuthority(actor,game,args,true,guestAware))
+    record.families.emplace_back(participant.participant,participant.family);
   qos_.tickets.emplace(b.hash, std::move(record));
   return Json{{"ticket", ticket}, {"lifetimeMs", 5000}};
 }
@@ -314,14 +315,8 @@ QosBinding Service::redeemQosTicket(const std::string &game,
   }
   if (t.permit.binding.hostRole)
     for (const auto &[user, familyId] : t.families) {
-      Statement f(store_.db(),
-                  "SELECT 1 FROM refresh_families f JOIN users u ON "
-                  "u.id=f.user_id WHERE f.id=? AND f.user_id=? AND f.game_id=? "
-                  "AND f.revoked=0 AND f.expires>? AND u.online_allowed=1");
-      f.bind(1, familyId);
-      f.bind(2, user);
-      f.bind(3, game);
-      f.bind(4, now());
+      Statement f(store_.db(),"SELECT 1 FROM refresh_families f JOIN users u ON u.id=f.user_id JOIN directory_members m ON COALESCE(m.parent_id,m.user_id)=u.id WHERE f.id=? AND m.user_id=? AND f.game_id=? AND m.game_id=f.game_id AND f.revoked=0 AND f.expires>? AND u.online_allowed=1 AND (m.family_id IS NULL OR m.family_id=f.id) AND m.machine_id=? AND m.session_id=?");
+      f.bind(1,familyId);f.bind(2,user);f.bind(3,game);f.bind(4,now());f.bind(5,t.permit.binding.host);f.bind(6,t.permit.binding.session);
       if (!f.row())
         throw Error("UNAUTHENTICATED");
     }
@@ -347,18 +342,8 @@ bool Service::validateQosGrant(const QosBinding &b) {
     if (!validateRelayGrantLocked(it->second.relay, true))
       return false;
     for (const auto &[actor, familyId] : it->second.families) {
-      Statement f(
-          store_.db(),
-          "SELECT 1 FROM refresh_families f JOIN users u ON u.id=f.user_id "
-          "JOIN directory_members m ON m.user_id=u.id WHERE f.id=? AND "
-          "f.user_id=? AND f.game_id=? AND f.revoked=0 AND f.expires>? AND "
-          "u.online_allowed=1 AND m.machine_id=? AND m.session_id=?");
-      f.bind(1, familyId);
-      f.bind(2, actor);
-      f.bind(3, b.game);
-      f.bind(4, now());
-      f.bind(5, b.host);
-      f.bind(6, b.session);
+      Statement f(store_.db(),"SELECT 1 FROM refresh_families f JOIN users u ON u.id=f.user_id JOIN directory_members m ON COALESCE(m.parent_id,m.user_id)=u.id WHERE f.id=? AND m.user_id=? AND f.game_id=? AND m.game_id=f.game_id AND f.revoked=0 AND f.expires>? AND u.online_allowed=1 AND (m.family_id IS NULL OR m.family_id=f.id) AND m.machine_id=? AND m.session_id=?");
+      f.bind(1,familyId);f.bind(2,actor);f.bind(3,b.game);f.bind(4,now());f.bind(5,b.host);f.bind(6,b.session);
       if (!f.row())
         return false;
     }

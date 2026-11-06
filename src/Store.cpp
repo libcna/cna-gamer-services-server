@@ -30,6 +30,7 @@
 #include "AvatarBaselineMigration.hpp"
 #include "AvatarRevisionMigration.hpp"
 #include "RecentLeaderboardMigration.hpp"
+#include "GuestMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -159,6 +160,7 @@ Store::Store(const std::string& path,std::function<long long()> leaderboardClock
             exec(RecentLeaderboardMigration);
             transaction.commit();
         }
+        if(current<27) {Transaction transaction(*this);exec(GuestMigration);transaction.commit();}
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }
