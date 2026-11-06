@@ -4,6 +4,8 @@
 #include "CnaService/Version.hpp"
 #include "Admission.hpp"
 #include "RelayListener.hpp"
+#include "QosListener.hpp"
+#include "CnaService/QosProtocol.hpp"
 #include "EventListener.hpp"
 #include "CnaService/RelayProtocol.hpp"
 #include <boost/beast/websocket.hpp>
@@ -102,6 +104,10 @@ net::awaitable<bool> exchange(Stream& stream,Service& service,RelayHub& hub,Even
         co_await http::async_read(stream,buffer,parser,net::redirect_error(net::use_awaitable,ec));
         if(ec)co_return false;
         auto request=parser.release();
+        if(request.target()==QosPath&&beast::websocket::is_upgrade(request)) {
+            if(buffer.size()!=0)co_return false;
+            co_await serveQos(std::move(stream),std::move(request),service,workers.requests,[&lease]{lease.release();});co_return true;
+        }
         if(request.target()==RelayPath&&beast::websocket::is_upgrade(request)) {
             if(buffer.size()!=0)co_return false;
             co_await serveRelay(std::move(stream),std::move(request),service,hub,workers.requests,[&lease]{lease.release();});co_return true;

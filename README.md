@@ -361,3 +361,12 @@ manifest and the files it lacks through the file route), validates it whole and 
 once; a client that declines updates is given a projection onto a catalog it has.
 `service_cna_avatars` proves both with the standard XNA API, and `service_avatar_validation` uses
 CNA's catalogs as golden fixtures while refusing malformed models and manifests.
+
+### Pre-join session quality (GAP-17)
+
+Services and native CNA clients negotiating `qos-prejoin-v1` measure the complete
+searcher→service→host path before joining. See [CNQ v1](protocol/qos-v1.md) for
+short-lived listing permits, strict probe-only roles, limits and compatibility.
+The existing `CNA_SERVICE_SESSION_CLIENT_HARNESS` environment variable enables
+`service_cna_qos`, `service_cna_qos_nohost` and optional `service_cna_qos_nat` tests.
+These are loopback/NAT-fixture qualification, not Internet performance guarantees.

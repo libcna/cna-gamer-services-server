@@ -31,6 +31,7 @@ bool Service::migrateDirectoryHost(const std::string& session,const std::string&
     const auto machine=next.text(0),owner=next.text(1);
     Statement handover(store_.db(),"UPDATE directory_sessions SET host_machine=?,host_id=?,revision=revision+1,expires=? WHERE id=?");
     handover.bind(1,machine);handover.bind(2,owner);handover.bind(3,now()+90);handover.bind(4,session);(void)handover.row();
+    invalidateQosHost(session);
     return true;
 }
 void Service::pruneDirectory() {

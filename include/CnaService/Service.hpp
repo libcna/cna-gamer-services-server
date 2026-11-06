@@ -4,6 +4,7 @@
 #include "CnaService/Avatars.hpp"
 #include <mutex>
 #include "CnaService/RelayAuthorization.hpp"
+#include "CnaService/QosAuthority.hpp"
 #include <array>
 #include <functional>
 #include <map>
@@ -71,7 +72,22 @@ public:
     /** @brief Authenticates an event channel. @param game Title. @param token Access token; never
      * logged. @return The account the live token belongs to; throws UNAUTHENTICATED otherwise. */
     std::string eventAccount(std::string_view game,std::string_view token);
+    /** @brief Redeems one-use encrypted probe authority. @param game Title. @param ticket Secret.
+     * @return Server-owned isolated route. */
+    QosBinding redeemQosTicket(const std::string& game,const std::string& ticket);
+    /** @brief Revalidates current family, host, filters and deadlines. @param binding Route.
+     * @return Whether this exact authority remains valid. */
+    bool validateQosGrant(const QosBinding& binding);
+    /** @brief Releases only an exact probe grant. @param binding Route. */
+    void releaseQosGrant(const QosBinding& binding);
 private:
+    friend struct QosTestAccess;
+    QosAuthorityState qos_;
+    Json qosControl(const Json& request,const std::string& actor,const std::string& game,
+                    const std::string& op,const Json& args);
+    bool qosValid(const QosAuthorityState::Permit& permit);
+    void pruneQos();
+    void invalidateQosHost(const std::string& session);
     void hint(const std::string& user,const char* topic);
     std::vector<std::pair<std::string,std::string>> hints_;
     std::function<void(const std::string&,const std::string&)> hintSink_;

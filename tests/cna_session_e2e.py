@@ -5,7 +5,11 @@ import os, pathlib, selectors, shutil, socket, subprocess, sys, tempfile, time
 
 def main():
     flags=sys.argv[2:]
-    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart","--migrate","--crash","--add"},"test arguments"
+    assert len(sys.argv)>=2 and len(flags)==len(set(flags)) and set(flags)<={"--isolated","--invite","--restart","--migrate","--crash","--add","--qos","--qos-nohost"},"test arguments"
+    qos="--qos" in flags
+    qos_nohost="--qos-nohost" in flags
+    assert not qos or not (set(flags)-{"--qos","--isolated"}),"qos has its own barriers"
+    assert not qos_nohost or not (set(flags)-{"--qos-nohost","--isolated"}),"nohost has its own barriers"
     isolated="--isolated" in flags
     invite="--invite" in flags
     restart="--restart" in flags
@@ -14,7 +18,7 @@ def main():
     crash="--crash" in flags
     # AddLocalGamer: the joiner joins with Bob, then adds Dana.
     add="--add" in flags
-    variant="invite" if invite else "crash" if crash else "migrate" if migrate else "add" if add else None
+    variant="qos-nohost" if qos_nohost else "qos" if qos else "invite" if invite else "crash" if crash else "migrate" if migrate else "add" if add else None
     helper=os.environ.get("CNA_SERVICE_SLIRP4NETNS") or shutil.which("slirp4netns")
     if isolated:
         if sys.platform!="linux" or not helper or not shutil.which("unshare") or not shutil.which("ip"):
@@ -122,7 +126,14 @@ def main():
                 server,url=start()
                 host=spawn("host",kind,game,url);send(host,"alice-password\ncharlie-password\n");read(host,"session-created")
                 if invite:read(host,"invite-sent")
-                join=spawn("join",kind,game,url);send(join,"bob-password\ndana-password\n");read(join,"session-joined")
+                join=spawn("join",kind,game,url);send(join,"bob-password\ndana-password\n")
+                if qos:
+                    # Host confirmation and public client measurement must precede membership.
+                    observed=read(host,"qos-host-observed ");assert int(observed.split()[1])>0,"real host echoed challenges"
+                    read(join,"qos-measured-before-join");proceed(join)
+                if qos_nohost:
+                    read(join,"qos-unavailable-before-join");proceed(join)
+                read(join,"session-joined")
                 both("session-roster")
                 if restart:
                     # The live session must survive a service restart: relay and directory reads

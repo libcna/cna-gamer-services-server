@@ -75,11 +75,11 @@ file(READ migrations/024_avatar_catalog_baseline.sql CNA_AVATAR_BASELINE_MIGRATI
 configure_file(src/AvatarBaselineMigration.hpp.in generated/AvatarBaselineMigration.hpp @ONLY)
 file(READ migrations/025_avatar_catalog_revisions.sql CNA_AVATAR_REVISION_MIGRATION)
 configure_file(src/AvatarRevisionMigration.hpp.in generated/AvatarRevisionMigration.hpp @ONLY)
-add_library(cna_service src/Privacy.cpp src/DatabaseLock.cpp src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
+add_library(cna_service src/QosProtocol.cpp src/QosAuthority.cpp src/Privacy.cpp src/DatabaseLock.cpp src/RelayAuthorization.cpp src/RelayProtocol.cpp src/Protocol.cpp src/Store.cpp src/Service.cpp src/Leaderboards.cpp src/Authentication.cpp src/SessionDirectory.cpp src/Invitations.cpp src/Parties.cpp src/Avatars.cpp src/AvatarAssets.cpp)
 target_include_directories(cna_service PUBLIC include protocol/include ${CMAKE_CURRENT_BINARY_DIR}/generated/include PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(cna_service PUBLIC OpenSSL::Crypto SQLite::SQLite3 nlohmann_json::nlohmann_json)
 target_compile_options(cna_service PRIVATE -Wall -Wextra -Wpedantic -Werror)
-add_executable(cna-gamer-services-server src/Main.cpp src/Admission.cpp src/Listener.cpp src/RelayListener.cpp src/EventListener.cpp src/RelayFlow.cpp src/RelayHub.cpp)
+add_executable(cna-gamer-services-server src/Main.cpp src/QosListener.cpp src/QosHub.cpp src/QosFlow.cpp src/Admission.cpp src/Listener.cpp src/RelayListener.cpp src/EventListener.cpp src/RelayFlow.cpp src/RelayHub.cpp)
 target_link_libraries(cna-gamer-services-server PRIVATE cna_service OpenSSL::SSL Boost::headers Threads::Threads)
 target_compile_options(cna-gamer-services-server PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_executable(cna-gamer-services-admin src/Admin.cpp)
@@ -301,3 +301,29 @@ set(CNA_HARNESS_TESTS
     service_cna_session_add_gamer service_cna_session_host_crash_loopback
     service_cna_session_add_gamer_loopback)
 set_tests_properties(${CNA_HARNESS_TESTS} PROPERTIES LABELS "cna-harness")
+
+# GAP-17: isolated pre-membership probe authority, codec/routing and paired CNA acceptance.
+add_executable(qos_protocol_tests tests/QosProtocolTests.cpp)
+target_link_libraries(qos_protocol_tests PRIVATE cna_service)
+target_compile_options(qos_protocol_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_qos_protocol COMMAND qos_protocol_tests)
+add_executable(qos_authority_tests tests/QosAuthorityTests.cpp tests/QosTestAccess.cpp)
+target_include_directories(qos_authority_tests PRIVATE src)
+target_link_libraries(qos_authority_tests PRIVATE cna_service)
+target_compile_options(qos_authority_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_qos_authority COMMAND qos_authority_tests)
+add_executable(qos_routing_tests tests/QosRoutingTests.cpp src/QosHub.cpp src/QosFlow.cpp)
+target_include_directories(qos_routing_tests PRIVATE src)
+target_link_libraries(qos_routing_tests PRIVATE cna_service Boost::headers Threads::Threads OpenSSL::SSL)
+target_compile_options(qos_routing_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME service_qos_routing COMMAND qos_routing_tests)
+
+add_test(NAME service_cna_qos COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --qos)
+set_tests_properties(service_cna_qos PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+add_test(NAME service_cna_qos_nat COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --qos --isolated)
+set_tests_properties(service_cna_qos_nat PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+
+add_test(NAME service_cna_qos_nohost COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cna_session_e2e.py ${CMAKE_CURRENT_BINARY_DIR} --qos-nohost)
+set_tests_properties(service_cna_qos_nohost PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+
+set_tests_properties(service_qos_protocol service_qos_authority service_qos_routing PROPERTIES LABELS "unit" TIMEOUT 60)
