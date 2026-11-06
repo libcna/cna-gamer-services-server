@@ -14,8 +14,9 @@ namespace CnaService {
 /** @brief Title-isolated logical service; transport-independent. */
 class Service {
 public:
-    /** @brief Opens service storage. @param database SQLite path. */
-    explicit Service(const std::string& database);
+    /** @brief Opens service storage. @param database SQLite path.
+     * @param leaderboardClock Optional UTC clock for leaderboard retention tests only. */
+    explicit Service(const std::string& database,std::function<long long()> leaderboardClock = {});
     /** @brief Handles an untrusted request without exposing internal diagnostics.
      * @param bytes Request bytes. @param peer Server-derived source identity.
      * @return Response bytes. */

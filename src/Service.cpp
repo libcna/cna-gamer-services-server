@@ -46,7 +46,7 @@ private:
 Service::FaultHook Service::faultHook_=nullptr;
 void Service::setFaultHookForTesting(FaultHook hook) {faultHook_=hook;}
 void Service::fault(const char* point) {if(faultHook_)faultHook_(point);}
-Service::Service(const std::string& database):store_(database) {store_.exec("PRAGMA synchronous=NORMAL");}
+Service::Service(const std::string& database,std::function<long long()> leaderboardClock):store_(database,std::move(leaderboardClock)) {store_.exec("PRAGMA synchronous=NORMAL");}
 std::string Service::handle(std::string_view bytes,std::string_view peer) {
     const auto metricStarted=std::chrono::steady_clock::now();
     std::string id,code="OK",result,operation="invalid";
@@ -527,8 +527,8 @@ Json Service::execute(const std::string& op,const std::string& game,const std::s
     if(op=="leaderboards.read")return readLeaderboard(game,a);
     if(op=="leaderboards.list") {
         // The title's provisioned boards, for a system leaderboard page; a game reads its own by identity.
-        Statement boards(store_.db(),"SELECT b.key,b.mode,b.ascending,b.arbitrated,(SELECT COUNT(*) FROM leaderboard_entries e WHERE e.game_id=b.game_id AND e.key=b.key AND e.mode=b.mode) FROM leaderboards b WHERE b.game_id=? ORDER BY b.key,b.mode LIMIT 257");
-        boards.bind(1,game);
+        Statement boards(store_.db(),"SELECT b.key,b.mode,b.ascending,b.arbitrated,(SELECT COUNT(*) FROM leaderboard_entries e WHERE e.game_id=b.game_id AND e.key=b.key AND e.mode=b.mode AND (b.key NOT IN ('BestScoreRecent','BestTimeRecent') OR e.updated>?)) FROM leaderboards b WHERE b.game_id=? ORDER BY b.key,b.mode LIMIT 257");
+        boards.bind(1,store_.leaderboardNow()-604800);boards.bind(2,game);
         Json list=Json::array();
         while(boards.row()) {
             if(list.size()>=256)throw Error("LIMIT_EXCEEDED");

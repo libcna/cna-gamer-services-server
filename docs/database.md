@@ -17,7 +17,7 @@ authorities.
 
 ## Schema and migrations
 
-`PRAGMA user_version` is the schema identity. The current version is 25. `Store::Store` refuses a
+`PRAGMA user_version` is the schema identity. The current version is 26. `Store::Store` refuses a
 larger value with `UNSUPPORTED_DATABASE_VERSION`. It applies every missing migration in numerical
 order; each migration has its own `BEGIN IMMEDIATE` transaction and sets its exact version before
 commit. If migration N fails, N rolls back and previously committed migrations remain valid; the
@@ -79,3 +79,13 @@ verify protocol-visible state. See [disaster-recovery.md](disaster-recovery.md).
 state, achievements, messages and a leaderboard; takes an online backup while the server is live;
 restores it; starts a second server on the restored database; and reads the durable state through
 the public protocol.
+
+## Recent leaderboard activation (26)
+
+Migration 026 preserves every existing leaderboard_entries.updated timestamp, adds the partial
+expiry index, and normalizes only BestScoreRecent/BestTimeRecent to best with descending/ascending
+ordering. It grants no new window to a genuinely old timestamp. Rows already have NOT NULL updated
+since migration 003; there is no supported timestamp-free service row format. Back up before
+rollout. Older binaries refuse version 26; restore a verified pre-upgrade backup for rollback.
+The wire protocol stays v1. The seven-day window and equal-write refresh are CNA policy;
+see protocol/v1.md.

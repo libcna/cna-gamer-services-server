@@ -29,6 +29,7 @@
 #include "FriendVoiceMigration.hpp"
 #include "AvatarBaselineMigration.hpp"
 #include "AvatarRevisionMigration.hpp"
+#include "RecentLeaderboardMigration.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -102,7 +103,13 @@ bool Statement::null(int index) const { return sqlite3_column_type(statement_,in
 void Statement::bindNull(int index) {
     if (sqlite3_bind_null(statement_,index)!=SQLITE_OK) throw Error("INTERNAL_ERROR");
 }
-Store::Store(const std::string& path) {
+long long Store::leaderboardNow() const {
+    const auto timestamp = leaderboardClock_ ? leaderboardClock_() : now();
+    if(timestamp<0 || timestamp>253402300799LL)throw Error("INTERNAL_ERROR");
+    return timestamp;
+}
+Store::Store(const std::string& path,std::function<long long()> leaderboardClock)
+    :leaderboardClock_(std::move(leaderboardClock)) {
     if (sqlite3_open_v2(path.c_str(),&db_,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX,nullptr)!=SQLITE_OK) {
         sqlite3_close(db_); db_=nullptr; throw Error("INTERNAL_ERROR");
     }
@@ -145,6 +152,13 @@ Store::Store(const std::string& path) {
         if(current<23){exec("BEGIN IMMEDIATE");exec(FriendVoiceMigration);exec("COMMIT");}
         if(current<24){exec("BEGIN IMMEDIATE");exec(AvatarBaselineMigration);exec("COMMIT");}
         if(current<25){exec("BEGIN IMMEDIATE");exec(AvatarRevisionMigration);exec("COMMIT");}
+        // CNA policy GAP-18, not recovered Xbox LIVE semantics. Existing updated timestamps
+        // are real write times; never replace them with restart/migration time.
+        if(current<26) {
+            Transaction transaction(*this);
+            exec(RecentLeaderboardMigration);
+            transaction.commit();
+        }
     } catch (...) { sqlite3_close(db_); db_=nullptr; throw; }
 }
 Store::~Store() { sqlite3_close(db_); }

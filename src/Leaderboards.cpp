@@ -13,6 +13,15 @@ long long integerField(const Json& object,const char* key,long long minimum,long
     const auto number=value.get<long long>();if(number<minimum||number>maximum)throw Error("INVALID_ARGUMENT");return number;
 }
 namespace {
+// Owner-approved CNA rolling-window policy GAP-18. XNA Refresh's leaderboard
+// Read overloads IL_0000..000a are Windows refusal stubs, not a retention oracle.
+bool recentKey(const std::string& key) {
+    return key=="BestScoreRecent" || key=="BestTimeRecent";
+}
+void pruneRecent(sqlite3* db,const std::string& game,long long timestamp) {
+    Statement prune(db,"DELETE FROM leaderboard_entries WHERE game_id=? AND key IN ('BestScoreRecent','BestTimeRecent') AND updated<=?");
+    prune.bind(1,game);prune.bind(2,timestamp-604800);(void)prune.row();
+}
 constexpr long long MaximumTicks=3155378975999999999LL;
 const std::set<std::string> Types{"int32","int64","single","double","string","datetime","timespan","outcome","stream"};
 // XNA's Stream columns (PropertyDictionary.GetValueStream): at most this many bytes, as lowercase hex.
@@ -50,6 +59,8 @@ void Store::leaderboard(const std::string& game,const Json& definition) {
     const auto key=stringField(definition,"key",64), aggregation=stringField(definition,"aggregation",16);
     const auto mode=integerField(definition,"mode",-2147483648LL,2147483647LL);
     if(!identifier(game)||!identifier(key)||(aggregation!="best"&&aggregation!="latest")||!definition.contains("ascending")||!definition["ascending"].is_boolean()||!definition.contains("arbitrated")||!definition["arbitrated"].is_boolean()||!definition.contains("columns"))throw Error("INVALID_ARGUMENT");
+    if(recentKey(key) && (aggregation!="best" || definition["ascending"].get<bool>()!=(key=="BestTimeRecent")))
+        throw Error("INVALID_ARGUMENT");
     schemaGuard(definition["columns"]);
     Statement cap(db(),"SELECT COUNT(*) FROM leaderboards WHERE game_id=?");cap.bind(1,game);(void)cap.row();if(cap.number(0)>=128)throw Error("LIMIT_EXCEEDED");
     Statement insert(db(),"INSERT INTO leaderboards(game_id,key,mode,ascending,aggregation,arbitrated,columns) VALUES(?,?,?,?,?,?,?)");
@@ -64,7 +75,7 @@ void Store::seedLeaderboard(const std::string& game,const Json& entry) {
     validateColumns(entry["columns"],parse(definition.text(0)));
     Statement user(db(),"SELECT id FROM users WHERE gamertag=?");user.bind(1,tag);if(!user.row())throw Error("NOT_FOUND");
     Statement insert(db(),"INSERT INTO leaderboard_entries(game_id,key,mode,user_id,rating,columns,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(game_id,key,mode,user_id) DO UPDATE SET rating=excluded.rating,columns=excluded.columns,updated=excluded.updated");
-    insert.bind(1,game);insert.bind(2,key);insert.bind(3,mode);insert.bind(4,user.text(0));insert.bind(5,rating);insert.bind(6,entry["columns"].dump());insert.bind(7,now());(void)insert.row();
+    insert.bind(1,game);insert.bind(2,key);insert.bind(3,mode);insert.bind(4,user.text(0));insert.bind(5,rating);insert.bind(6,entry["columns"].dump());insert.bind(7,leaderboardNow());(void)insert.row();
 }
 Json Service::readLeaderboard(const std::string& game,const Json& args) {
     const auto key=stringField(args,"key",64);if(!identifier(key))throw Error("INVALID_ARGUMENT");
@@ -78,13 +89,15 @@ Json Service::readLeaderboard(const std::string& game,const Json& args) {
     }
     Statement definition(store_.db(),"SELECT ascending FROM leaderboards WHERE game_id=? AND key=? AND mode=?");definition.bind(1,game);definition.bind(2,key);definition.bind(3,mode);if(!definition.row())throw Error("NOT_FOUND");
     // Only the provisioned sort direction selects a trusted SQL fragment; every request value is bound.
+    const auto timestamp=store_.leaderboardNow();
+    pruneRecent(store_.db(),game,timestamp);
     const auto direction=definition.number(0)?"ASC":"DESC";
-    const std::string prefix=std::string("WITH ranked AS (SELECT u.id,u.gamertag,e.rating,e.columns,ROW_NUMBER() OVER(ORDER BY e.rating ")+direction+",e.user_id) rank FROM leaderboard_entries e JOIN users u ON u.id=e.user_id WHERE e.game_id=? AND e.key=? AND e.mode=?), selected AS (SELECT *,ROW_NUMBER() OVER(ORDER BY rank)-1 idx FROM ranked WHERE (?=0 OR gamertag COLLATE NOCASE IN (SELECT value FROM json_each(?)))) ";
-    auto bind=[&](Statement& query){query.bind(1,game);query.bind(2,key);query.bind(3,mode);query.bind(4,restricted?1LL:0LL);query.bind(5,gamers.dump());};
-    Statement count(store_.db(),(prefix+"SELECT COUNT(*),COALESCE(MAX(CASE WHEN gamertag=? COLLATE NOCASE THEN idx END),-1) FROM selected").c_str());bind(count);count.bind(6,pivot);(void)count.row();
+    const std::string prefix=std::string("WITH ranked AS (SELECT u.id,u.gamertag,e.rating,e.columns,ROW_NUMBER() OVER(ORDER BY e.rating ")+direction+",e.user_id) rank FROM leaderboard_entries e JOIN users u ON u.id=e.user_id WHERE e.game_id=? AND e.key=? AND e.mode=? AND (?=0 OR e.updated>?)), selected AS (SELECT *,ROW_NUMBER() OVER(ORDER BY rank)-1 idx FROM ranked WHERE (?=0 OR gamertag COLLATE NOCASE IN (SELECT value FROM json_each(?)))) ";
+    auto bind=[&](Statement& query){query.bind(1,game);query.bind(2,key);query.bind(3,mode);query.bind(4,recentKey(key)?1LL:0LL);query.bind(5,timestamp-604800);query.bind(6,restricted?1LL:0LL);query.bind(7,gamers.dump());};
+    Statement count(store_.db(),(prefix+"SELECT COUNT(*),COALESCE(MAX(CASE WHEN gamertag=? COLLATE NOCASE THEN idx END),-1) FROM selected").c_str());bind(count);count.bind(8,pivot);(void)count.row();
     const auto total=count.number(0);if(total>2147483647LL)throw Error("LIMIT_EXCEEDED");
     if(!pivot.empty())start=std::max(0LL,count.number(1)-size/2);
-    Statement page(store_.db(),(prefix+"SELECT id,gamertag,rating,columns,rank FROM selected ORDER BY idx LIMIT ? OFFSET ?").c_str());bind(page);page.bind(6,size);page.bind(7,start);
+    Statement page(store_.db(),(prefix+"SELECT id,gamertag,rating,columns,rank FROM selected ORDER BY idx LIMIT ? OFFSET ?").c_str());bind(page);page.bind(8,size);page.bind(9,start);
     Json rows=Json::array();while(page.row())rows.push_back(Json{{"userId",page.text(0)},{"gamertag",page.text(1)},{"rating",page.number(2)},{"columns",parse(page.text(3))},{"rank",page.number(4)}});
     return Json{{"start",start},{"total",total},{"entries",rows}};
 }
@@ -127,9 +140,10 @@ BoardPolicy policyFor(sqlite3* db,const std::string& game,const std::string& key
 }
 void writeEntry(sqlite3* db,const std::string& game,const std::string& key,long long mode,const std::string& user,
     long long rating,const std::string& columns,const BoardPolicy& policy,long long timestamp) {
-    Statement write(db,"INSERT INTO leaderboard_entries(game_id,key,mode,user_id,rating,columns,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(game_id,key,mode,user_id) DO UPDATE SET rating=excluded.rating,columns=excluded.columns,updated=excluded.updated WHERE ?=1 OR (?=1 AND excluded.rating<leaderboard_entries.rating) OR (?=0 AND excluded.rating>leaderboard_entries.rating)");
+    Statement write(db,"INSERT INTO leaderboard_entries(game_id,key,mode,user_id,rating,columns,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(game_id,key,mode,user_id) DO UPDATE SET rating=excluded.rating,columns=excluded.columns,updated=excluded.updated WHERE ?=1 OR (?=1 AND excluded.rating<leaderboard_entries.rating) OR (?=0 AND excluded.rating>leaderboard_entries.rating) OR (?=1 AND (leaderboard_entries.updated<=? OR excluded.rating=leaderboard_entries.rating))");
     write.bind(1,game);write.bind(2,key);write.bind(3,mode);write.bind(4,user);write.bind(5,rating);write.bind(6,columns);write.bind(7,timestamp);
-    write.bind(8,policy.latest?1LL:0LL);write.bind(9,policy.ascending?1LL:0LL);write.bind(10,policy.ascending?1LL:0LL);(void)write.row();
+    write.bind(8,policy.latest?1LL:0LL);write.bind(9,policy.ascending?1LL:0LL);write.bind(10,policy.ascending?1LL:0LL);
+    write.bind(11,recentKey(key)?1LL:0LL);write.bind(12,timestamp-604800);(void)write.row();
 }
 }
 Json Service::commitLeaderboardGame(const std::string& user,const std::string& game,const Json& args) {
@@ -184,7 +198,9 @@ Json Service::commitLeaderboardGame(const std::string& user,const std::string& g
     {
         Store::Transaction transaction(store_);
         const auto timestamp=now();
-        for(const auto& row:rows)writeEntry(store_.db(),game,row.key,row.mode,row.user,row.rating,row.columns,row.policy,timestamp);
+        const auto written=store_.leaderboardNow();
+        pruneRecent(store_.db(),game,written);
+        for(const auto& row:rows)writeEntry(store_.db(),game,row.key,row.mode,row.user,row.rating,row.columns,row.policy,written);
         if(!round.empty()) {
             const auto report=reported.dump(),reportDigest=sha256(report);
             Statement existing(store_.db(),"SELECT digest FROM arbitration_submissions WHERE round_id=? AND machine_id=?");existing.bind(1,round);existing.bind(2,machine);
@@ -211,6 +227,8 @@ void Service::resolveArbitration(const std::string& game,const std::string& roun
     for(const auto& id:due) {
         try {
             Store::Transaction transaction(store_);
+            const auto written=store_.leaderboardNow();
+            pruneRecent(store_.db(),game,written);
             std::vector<Json> reports;
             Statement submissions(store_.db(),"SELECT entries FROM arbitration_submissions WHERE round_id=?");submissions.bind(1,id);
             while(submissions.row())reports.push_back(Json::parse(submissions.text(0)));
@@ -227,7 +245,7 @@ void Service::resolveArbitration(const std::string& game,const std::string& roun
                 for(const auto& [value,tally]:candidates) {
                 if(tally.first*2<=reporters)continue;
                 const auto& row=tally.second;const auto& [target,key,mode]=identity;
-                writeEntry(store_.db(),game,key,mode,target,row["rating"].get<long long>(),row["columns"].dump(),policyFor(store_.db(),game,key,mode),timestamp);
+                writeEntry(store_.db(),game,key,mode,target,row["rating"].get<long long>(),row["columns"].dump(),policyFor(store_.db(),game,key,mode),written);
                 }
             }
             Statement done(store_.db(),"UPDATE arbitration_rounds SET resolved=1,updated=? WHERE id=?");done.bind(1,timestamp);done.bind(2,id);(void)done.row();

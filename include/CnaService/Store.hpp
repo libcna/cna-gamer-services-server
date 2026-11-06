@@ -3,6 +3,7 @@
 #include "CnaService/Protocol.hpp"
 #include <sqlite3.h>
 #include <string>
+#include <functional>
 #include <string_view>
 
 namespace CnaService {
@@ -37,15 +38,18 @@ private:
     sqlite3_stmt* statement_ = nullptr;
 };
 /** @brief The database schema version this build migrates to (PRAGMA user_version). */
-inline constexpr long long SchemaVersion = 25;
+inline constexpr long long SchemaVersion = 26;
 /** @brief Checks game defaults (XNA GameDefaults): an object of at most the known keys, each with a
  * value of its kind. @param value Candidate. @throws Error INVALID_ARGUMENT otherwise. */
 void validateGameDefaults(const Json& value);
 /** @brief Persistent service database with transactional versioned migration. */
 class Store {
 public:
-    /** @brief Opens and migrates. @param path Database location. */
-    explicit Store(const std::string& path);
+    /** @brief Opens and migrates. @param path Database location.
+     * @param leaderboardClock Optional UTC clock for leaderboard retention tests only. */
+    explicit Store(const std::string& path, std::function<long long()> leaderboardClock = {});
+    /** @brief Captures UTC Unix seconds for leaderboard retention only. @return Timestamp. */
+    long long leaderboardNow() const;
     /** @brief Closes the database. */
     ~Store();
     Store(const Store&) = delete;
@@ -98,6 +102,7 @@ public:
      * @param entry Definition identity, gamer, rating and typed columns. */
     void seedLeaderboard(const std::string& game,const Json& entry);
 private:
+    std::function<long long()> leaderboardClock_;
     sqlite3* db_ = nullptr;
     int depth_ = 0;
 };
