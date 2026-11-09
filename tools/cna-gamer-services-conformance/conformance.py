@@ -40,7 +40,8 @@ PUBLIC_OPERATIONS = frozenset(
     profile.gameDefaults profile.setGameDefaults profile.setGamerZone friends.list friends.add
     friends.remove friends.accept presence.set presence.status achievements.list achievements.award
     assets.read leaderboards.read leaderboards.definition leaderboards.list leaderboards.game.begin
-    leaderboards.game.commit leaderboards.game.abort sessions.relayTicket sessions.create sessions.find
+    leaderboards.game.commit leaderboards.game.abort sessions.findQos sessions.qosTicket
+    sessions.qosHostTicket sessions.relayTicket sessions.create sessions.find
     sessions.get sessions.touch sessions.update sessions.join sessions.joinInvited sessions.leave
     sessions.remove sessions.addMembers invites.send invites.list invites.get invites.accept
     invites.dismiss invites.joinFriend parties.get parties.invite parties.accept parties.decline
@@ -791,6 +792,129 @@ class Suite:
         self.client.expect("sessions.leave", "OK", {"session": session}, bob["token"])
         self.client.expect("sessions.leave", "OK", {"session": session}, alice["token"])
 
+    async def _prejoin_qos(self) -> None:
+        alice = self.credentials["alice"]["token"]
+        bob = self.credentials["bob"]["token"]
+        dave = self.credentials["dave"]["token"]
+        capabilities = self.client.expect("hello", "OK")["result"]["capabilities"]
+        require("qos-prejoin-v1" in capabilities, "hello does not advertise qos-prejoin-v1")
+        # A property no other fixture uses keeps the listing page to exactly this session.
+        marker = [4242, None, None, None, None, None, None, None]
+        created = self.client.expect(
+            "sessions.create", "OK",
+            {
+                "kind": "player", "maxGamers": 4, "privateSlots": 0, "properties": marker,
+                "allowJoinInProgress": True, "allowHostMigration": False, "participants": [alice],
+            }, alice,
+        )["result"]
+        session, host_machine = created["session"], created["hostMachine"]
+        query = {"kind": "player", "localCount": 1, "properties": marker, "start": 0, "limit": 8}
+
+        def lower_hex(value: object, length: int) -> bool:
+            return isinstance(value, str) and len(value) == length and all(c in "0123456789abcdef" for c in value)
+
+        self.client.expect("sessions.findQos", "INVALID_ARGUMENT", {**query, "limit": 33}, bob)
+        unmatched = self.client.expect(
+            "sessions.findQos", "OK", {**query, "properties": [4243] + [None] * 7}, bob
+        )["result"]
+        require(unmatched["sessions"] == [] and unmatched["more"] is False, "a no-match QoS listing issued permits")
+        listed = self.client.expect("sessions.findQos", "OK", query, bob)["result"]
+        plain = self.client.expect("sessions.find", "OK", query, bob)["result"]
+        require(len(listed["sessions"]) == 1, "QoS listing did not return exactly the advertised session")
+        row = listed["sessions"][0]
+        require(set(row) == {"listing", "permit", "lifetimeMs"}, "QoS listing row shape drifted")
+        require(row["listing"] == plain["sessions"][0], "QoS listing differs from the sessions.find advertisement")
+        require(
+            row["listing"]["session"] == session and row["listing"]["hostMachine"] == host_machine,
+            "QoS listing names another session",
+        )
+        require(lower_hex(row["permit"], 64) and row["lifetimeMs"] == 30000, "QoS permit shape or lifetime drifted")
+        permit = row["permit"]
+
+        # Refusals consume nothing: the permit is still redeemable by its own searcher below.
+        self.client.expect("sessions.qosTicket", "INVALID_ARGUMENT", {"permit": permit, "session": session}, bob)
+        self.client.expect("sessions.qosTicket", "NOT_AUTHORIZED", {"permit": permit}, dave)
+        self.client.expect("sessions.qosTicket", "NOT_AUTHORIZED", {"permit": "0" * 64}, bob)
+
+        # Responder authority needs the host's live game relay grant, so it is refused until the
+        # host machine is attached to the relay.
+        host_ticket_args = {"session": session, "participants": [alice]}
+        self.client.expect("sessions.qosHostTicket", "NOT_AUTHORIZED", host_ticket_args, alice)
+
+        relay_endpoint = self.server.url.replace("https:", "wss:").replace("/cna/v1", "/cna/relay/v1")
+        qos_endpoint = self.server.url.replace("https:", "wss:").replace("/cna/v1", "/cna/qos/v1")
+        context = self.client.context
+
+        async def attach(endpoint: str, secret: str, request_id: str):
+            socket = await websockets.connect(
+                endpoint, ssl=context, compression=None, proxy=None, ping_interval=None, close_timeout=2
+            )
+            await socket.send(json.dumps({"v": 1, "id": request_id, "game": TITLE, "ticket": secret}))
+            welcome = json.loads(await asyncio.wait_for(socket.recv(), 5))
+            require(welcome.get("error") == "OK" and welcome.get("id") == request_id, f"{request_id} welcome mismatch")
+            return socket, welcome
+
+        relay_ticket = self.client.expect(
+            "sessions.relayTicket", "OK", {"session": session, "participants": [alice]}, alice
+        )["result"]["ticket"]
+        relay, _ = await attach(relay_endpoint, relay_ticket, "qos-host-relay")
+        host = searcher = None
+        try:
+            self.client.expect(
+                "sessions.qosHostTicket", "NOT_AUTHORIZED", {"session": session, "participants": [bob]}, bob
+            )
+            host_ticket = self.client.expect("sessions.qosHostTicket", "OK", host_ticket_args, alice)["result"]
+            require(set(host_ticket) == {"ticket", "lifetimeMs"}, "QoS host ticket shape drifted")
+            require(
+                lower_hex(host_ticket["ticket"], 64) and host_ticket["lifetimeMs"] == 5000,
+                "QoS host ticket shape or lifetime drifted",
+            )
+            self.client.expect("sessions.qosHostTicket", "LIMIT_EXCEEDED", host_ticket_args, alice)
+            host, host_welcome = await attach(qos_endpoint, host_ticket["ticket"], "qos-host")
+            require(
+                host_welcome["result"] == {"role": "host", "probe": None, "maxFrameBytes": 1200, "maxQueuedFrames": 16},
+                "QoS host welcome mismatch",
+            )
+
+            issued = self.client.expect("sessions.qosTicket", "OK", {"permit": permit}, bob)["result"]
+            require(set(issued) == {"ticket", "probe", "lifetimeMs"}, "QoS searcher ticket shape drifted")
+            require(
+                lower_hex(issued["ticket"], 64) and lower_hex(issued["probe"], 32)
+                and issued["probe"] != "0" * 32 and issued["lifetimeMs"] == 5000,
+                "QoS searcher ticket shape or lifetime drifted",
+            )
+            self.client.expect("sessions.qosTicket", "NOT_AUTHORIZED", {"permit": permit}, bob)
+            searcher, searcher_welcome = await attach(qos_endpoint, issued["ticket"], "qos-searcher")
+            require(
+                searcher_welcome["result"] == {
+                    "role": "searcher", "probe": issued["probe"], "maxFrameBytes": 1200, "maxQueuedFrames": 16,
+                },
+                "QoS searcher welcome mismatch",
+            )
+
+            probe = bytes.fromhex(issued["probe"])
+
+            def frame(kind: int, sequence: int, count: int, nonce: int) -> bytes:
+                return b"CNQ\x01" + bytes([kind, sequence, count, 0]) + probe + nonce.to_bytes(8, "big")
+
+            begin, ping, pong, cancel = frame(7, 0, 0, 0), frame(1, 0, 4, 42), frame(2, 0, 4, 42), frame(6, 0, 0, 0)
+            require(await asyncio.wait_for(host.recv(), 5) == begin, "host did not receive Begin for the probe")
+            await searcher.send(ping)
+            require(await asyncio.wait_for(host.recv(), 5) == ping, "Ping did not reach the host unchanged")
+            await host.send(pong)
+            require(await asyncio.wait_for(searcher.recv(), 5) == pong, "Pong did not reach the searcher unchanged")
+            await searcher.send(cancel)
+            require(await asyncio.wait_for(host.recv(), 5) == cancel, "host was not told the probe was cancelled")
+            require(await asyncio.wait_for(searcher.recv(), 5) == cancel, "searcher cancel was not confirmed")
+        finally:
+            for socket in (searcher, host, relay):
+                if socket is not None:
+                    await socket.close()
+        self.client.expect("sessions.leave", "OK", {"session": session}, alice)
+
+    def prejoin_qos(self) -> None:
+        asyncio.run(self._prejoin_qos())
+
     def logout(self) -> None:
         fresh = self.client.expect(
             "auth.login", "OK", {"username": "carol", "password": PASSWORDS["carol"]}
@@ -831,6 +955,7 @@ class Suite:
             ("directory mutation, local members and host removal", self.directory_mutation_and_removal),
             ("parties, join-friend and invitation dismissal", self.parties_and_join_friend),
             ("Ranked arbitration agreement", self.ranked_arbitration),
+            ("pre-join QoS permits, tickets and probe routing", self.prejoin_qos),
             ("event hints and event hello validation", self.events),
             ("access-token expiration and refresh recovery", self.access_expiration),
             ("logout revocation", self.logout),

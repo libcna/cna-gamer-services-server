@@ -23,6 +23,7 @@ own it. Symbols and file names are preferred over line numbers so the map surviv
 | Event WebSocket | HTTP upgrade in `Listener.cpp` | `EventListener.cpp`; in-memory `EventHub` | `relay_e2e.py`, `SocialTests.cpp` hint sink | exact event hello, authenticated hint and reconnectable close |
 | Relay ticket authority | `sessions.relayTicket` | `RelayAuthorization.cpp`, migration 008 | `RelayAuthorizationTests.cpp` | ticket issue, one-use redemption and replay refusal |
 | Relay binary framing and routing | WSS upgrade in `Listener.cpp` | `RelayProtocol.cpp`, `RelayFlow.cpp`, `RelayListener.cpp`, `RelayHub.cpp` | relay golden vectors, `RelayProtocolTests.cpp`, `RelayFlowTests.cpp`, `relay_e2e.py` | authenticated source injection, routing/drop and malformed frame close |
+| Pre-join QoS (CNQ v1) | `sessions.findQos`, `sessions.qosTicket`, `sessions.qosHostTicket` via `Service::qosControl`; `/cna/qos/v1` WSS upgrade in `Listener.cpp` | `QosAuthority.cpp` (bounded process memory, no schema), `QosProtocol.cpp`, `QosListener.cpp`, `QosHub.cpp`, `QosFlow.cpp` | QoS golden vectors, `QosAuthorityTests.cpp`, `QosProtocolTests.cpp`, `QosRoutingTests.cpp`, `cna_session_e2e.py --qos` / `--qos-nohost` | listing permits, one-use searcher ticket, relay-gated host ticket, welcomes and Begin/Ping/Pong/Cancel routing |
 
 ## Database migration ownership
 

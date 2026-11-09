@@ -22,8 +22,8 @@ writes a stable report containing the commit, dirty state, timestamp, compiler, 
 configuration, duration and every case result. Temporary databases, certificates and credentials
 are created with owner-only permissions and deleted at exit.
 
-The default profile runs 21 cases, including a deliberate roughly 61-second wait that proves a
-relay ticket expires according to the server-advertised lifetime. Add `--smoke` for the 20-case
+The default profile runs 22 cases, including a deliberate roughly 61-second wait that proves a
+relay ticket expires according to the server-advertised lifetime. Add `--smoke` for the 21-case
 CI/local profile that skips only that wall-clock wait; ticket expiry is still covered by the
 scratch-only chaos suite there.
 
@@ -57,6 +57,12 @@ CTEST_PARALLEL_LEVEL=6 ctest --test-dir build-agent -R service_conformance_smoke
 - a two-machine Ranked round whose matching reports resolve an arbitrated leaderboard;
 - relay ticket redemption, one-use replay refusal, wall-clock expiry, authenticated source
   injection, unknown-route drop and malformed binary framing;
+- pre-join QoS (`qos-prejoin-v1`): `sessions.findQos` permits only for the returned listing,
+  identical to the `sessions.find` advertisement; one-use, searcher-bound `sessions.qosTicket`;
+  `sessions.qosHostTicket` refused until the host machine holds a live relay grant and limited to one
+  responder per session; the `/cna/qos/v1` host and searcher welcomes, and Begin, Ping, Pong and
+  Cancel routed unchanged between them (the timed train, Report and ingress budgets remain covered by
+  focused tests and the CNA harness tests);
 - event authentication, hints and unexpected hello fields;
 - graceful host migration and privacy/block enforcement;
 - an executable coverage guard proving every currently dispatched public control operation is

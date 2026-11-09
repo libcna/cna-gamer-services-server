@@ -109,8 +109,8 @@ python3 tools/cna-gamer-services-conformance/conformance.py \
 ```
 
 It provisions scratch state through the admin executable and then uses only verified HTTPS/WSS. It
-does not read SQLite or require CNA. The maintained suite has 20 smoke cases plus one deliberate
-wall-clock ticket-expiry case, and checks that all 59 public dispatcher operations have black-box
+does not read SQLite or require CNA. The maintained suite has 21 smoke cases plus one deliberate
+wall-clock ticket-expiry case, and checks that all 62 public dispatcher operations have black-box
 coverage. See
 [the conformance guide](tools/cna-gamer-services-conformance/README.md).
 

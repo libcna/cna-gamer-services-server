@@ -1,6 +1,6 @@
 ---
 title: Control operation index
-summary: All 59 public v1 operations grouped by authority, state effect, implementation owner and black-box evidence.
+summary: All 62 public v1 operations grouped by authority, state effect, implementation owner and black-box evidence.
 order: 30
 ---
 
@@ -65,6 +65,9 @@ relay upgrades likewise have their own handshakes.
 | `sessions.remove` | Host removes a non-host machine. | `SessionDirectory.cpp`; `REMOVED_BY_HOST` conformance. |
 | `sessions.addMembers` | Existing machine owner adds authenticated local gamers. | `SessionDirectory.cpp`; local-group conformance. |
 | `sessions.relayTicket` | Machine owner plus exact participants; issues one-use secret. | `RelayAuthorization.cpp`; relay conformance. |
+| `sessions.findQos` | Online account; the `sessions.find` page plus a 30-second probe permit per returned listing (capability `qos-prejoin-v1`), held in memory only. | `QosAuthority.cpp`; pre-join QoS conformance and `QosAuthorityTests.cpp`. |
+| `sessions.qosTicket` | The permit's own searcher and sign-in family; consumes the permit once for a 5-second searcher ticket and probe id. | `QosAuthority.cpp`; pre-join QoS conformance. |
+| `sessions.qosHostTicket` | Current host machine's complete local group with a live relay grant; one responder ticket per session. | `QosAuthority.cpp`; pre-join QoS conformance and CNA QoS harness tests. |
 | `invites.send`, `invites.list`, `invites.get` | Member send / recipient inbox and inspection. | `Invitations.cpp`; invitation conformance. |
 | `invites.accept`, `invites.dismiss` | Recipient state transitions. | `Invitations.cpp`; accept/use/dismiss conformance. |
 | `invites.joinFriend` | Friend/party relationship grants a pending request to a joinable game. | `Invitations.cpp`; join-friend conformance. |
@@ -80,7 +83,9 @@ relay upgrades likewise have their own handshakes.
 The event channel authenticates exactly `{v,id,game,token}` at `/cna/v1/events`, then emits only
 coalesced topic hints. The relay authenticates exactly `{v,id,game,ticket}` at
 `/cna/relay/v1`, injects the authenticated source machine into binary frames and routes only within
-durable membership. Both are black-box exercised independently of the 59 control operations.
+durable membership. The pre-join QoS channel authenticates the same hello shape at `/cna/qos/v1`
+with a QoS ticket and routes only CNQ v1 probe frames between one searcher and the bound host. All
+three are black-box exercised independently of the 62 control operations.
 
 ## Safe change procedure
 

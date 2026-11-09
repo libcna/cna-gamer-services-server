@@ -37,11 +37,14 @@ def main():
             print("Unprivileged user/network namespaces are unavailable; NAT session test not run")
             return 77
     build=pathlib.Path(sys.argv[1]).resolve()
-    client=os.environ.get("CNA_SERVICE_SESSION_CLIENT_HARNESS")
+    # The C ABI guest scenario is CNA's separate cna_service_guest_c_api_harness, not the XNA API
+    # session harness, so it has its own variable and the whole suite can run in one invocation.
+    harness="CNA_SERVICE_GUEST_C_API_HARNESS" if guests_c else "CNA_SERVICE_SESSION_CLIENT_HARNESS"
+    client=os.environ.get(harness)
     if not client:
-        print("CNA_SERVICE_SESSION_CLIENT_HARNESS required")
+        print(harness+" required")
         return 77
-    assert pathlib.Path(client).is_file(),"missing CNA public session harness"
+    assert pathlib.Path(client).is_file(),"missing CNA "+("C API guest" if guests_c else "public session")+" harness"
     with tempfile.TemporaryDirectory(prefix="cna-public-session-",dir=build) as temp:
         root=pathlib.Path(temp);os.chmod(root,0o700)
         db=root/"state.sqlite3";cert=root/"cert.pem";key=root/"key.pem"

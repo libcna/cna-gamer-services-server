@@ -122,7 +122,7 @@ server and never prints a credential. Passwords and JSON documents come from std
 Restrict both to the unprivileged service user. Back up with the checked-in SQLite online-backup
 tool (`python3 tools/cna-gamer-services-deploy/backup.py --database service.sqlite3 --output-dir backups`),
 never by copying the file while it runs.
-Opening a database migrates it transactionally to the current schema (23); a newer schema is
+Opening a database migrates it transactionally to the current schema (27); a newer schema is
 refused and nothing is deleted to resolve it. Back up before upgrading the server.
 
 **TLS.** TLS 1.2 or newer with the given chain and key; clients verify chain and hostname. A new
@@ -307,20 +307,26 @@ CNA_SERVICE_DIRECTORY_CLIENT_HARNESS=$B/cna_service_directory_client_harness \
 CNA_SERVICE_RELAY_CLIENT_HARNESS=$B/cna_service_relay_client_harness \
 CNA_SERVICE_SESSION_CLIENT_HARNESS=$B/cna_service_session_client_harness \
 CNA_SERVICE_AVATAR_CLIENT_HARNESS=$B/cna_service_avatar_client_harness \
+CNA_SERVICE_GUEST_C_API_HARNESS=$B/modules/c-api/cna_service_guest_c_api_harness \
 CNA_AVATAR_CATALOGS=$CNA/modules/gamer-services/assets/avatars \
 CTEST_PARALLEL_LEVEL=6 ctest --test-dir build-agent --output-on-failure
 ```
 
+`cna_c_api_service_client` needs a CNA build with the C API (`CNA_BUILD_C_API`), and
+`cna_service_guest_c_api_harness` one with the C API and the shared runtime (`CNA_SHARED_LIBRARY`).
+
 The `award` step of `service_tls_e2e` creates a `GraphicsDevice` to decode an achievement picture,
 and the test removes `DISPLAY` from the harness environment on purpose. A harness from a CNA build
-whose default renderer needs a window (`OPENGLES3`, `VULKAN`, …) therefore needs
+whose default renderer needs a window (`OPENGLES3`, `SDLGPU`, …) therefore needs
 `SDL_VIDEODRIVER=offscreen` in the environment; a `HEADLESS` build needs nothing. They cover Guide sign-in, social flows, pictures and rich
 presence through the standard XNA API (`service_tls_e2e`); the directory and public `BeginFind` (`service_cna_directory`); raw and owned
 ENet over the relay (`service_cna_relay`, `service_cna_owned_enet`); the public NetworkSession
 lifecycle for PlayerMatch and Ranked (`service_cna_session`), invitations (`service_cna_invite`),
 service restart mid-session (`service_cna_session_restart`), host migration and host crash
 (`service_cna_session_migration`, `service_cna_session_host_crash`), `AddLocalGamer`
-(`service_cna_session_add_gamer`) and avatars with an installed catalog pack and a projection (`service_cna_avatars`).
+(`service_cna_session_add_gamer`), avatars with an installed catalog pack and a projection (`service_cna_avatars`)
+and online guests in PlayerMatch and Ranked sessions through the XNA API (`service_cna_guests`, with the
+session harness) and through the C ABI (`service_cna_guests_c_api`, with the C API guest harness).
 
 The `_nat` variants and the host-crash and AddLocalGamer tests run each CNA process in its own
 rootless user and network namespace behind an outbound-only NAT helper, with identical private
